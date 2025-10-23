@@ -10,6 +10,9 @@
 ;; Primitive: wrapper for built-in operations
 (struct primitive (name func) #:transparent)
 
+;; Location: wrapper for store locations (addresses)
+(struct loc (addr) #:transparent)
+
 ;; ============================================================================
 ;; Environment Operations
 ;; ============================================================================
@@ -34,6 +37,38 @@
     (if binding
         (cdr binding)
         (error 'lookup-env "Unbound variable: ~a" var))))
+
+;; ============================================================================
+;; Store Operations
+;; ============================================================================
+
+;; empty-store : Store
+(define empty-store '())
+
+;; alloc-loc : Store -> (values Loc Store)
+;; Allocates a fresh location by finding max address + 1
+(define (alloc-loc store)
+  (let ([next-addr (+ 1 (foldl max -1 (map car store)))])
+    (values (loc next-addr) store)))
+
+;; lookup-store : Loc Store -> Value
+;; Retrieves the value at a location in the store
+(define (lookup-store l store)
+  (match l
+    [(loc addr)
+     (let ([binding (assoc addr store)])
+       (if binding
+           (cdr binding)
+           (error 'lookup-store "Unbound location: ~a" addr)))]
+    [_ (error 'lookup-store "Not a location: ~a" l)]))
+
+;; update-store : Loc Value Store -> Store
+;; Updates the store with a new binding (immutable - returns new store)
+(define (update-store l v store)
+  (match l
+    [(loc addr)
+     (cons (cons addr v) store)]
+    [_ (error 'update-store "Not a location: ~a" l)]))
 
 ;; ============================================================================
 ;; Primitive Operations
@@ -61,20 +96,21 @@
 ;; Evaluator
 ;; ============================================================================
 
-;; eval-expr : Expr Env -> Value
-;; Implements the evaluation relation Γ ⊢ e ⇒ v
-(define (eval-expr expr env)
+;; eval-expr : Expr Env Store -> (values Value Store)
+;; Implements the evaluation relation Γ; Σ ⊢ e ⇒ v ; Σ'
+(define (eval-expr expr env store)
   (match expr
-    ;; NUM: Γ ⊢ n ⇒ n
-    [(? number? n) n]
+    ;; NUM: Γ; Σ ⊢ n ⇒ n ; Σ
+    [(? number? n) (values n store)]
     
-    ;; ID: Γ(x) = v  =>  Γ ⊢ x ⇒ v
-    [(? symbol? x) (lookup-env x env)]
+    ;; VAR: Γ(x) = v  =>  Γ; Σ ⊢ x ⇒ v ; Σ
+    ;; this interpreter calls it VAR instead of previous ID
+    [(? symbol? x) (values (lookup-env x env) store)]
     
-    ;; ABS: Γ ⊢ (λ x. e) ⇒ ⟨x, e, Γ⟩
+    ;; ABS: Γ; Σ ⊢ (λ x. e) ⇒ ⟨x, e, Γ⟩ ; Σ
     ;; Syntax: (lambda (x1 x2 ...) body)
     [`(lambda (,params ...) ,body)
-     (closure params body env)]
+     (values (closure params body env) store)]
     
     ;; Extended syntax: let
     ;; let ([x e]) e' ≜ @ (λ x. e') e
@@ -85,21 +121,34 @@
 
     [`(let ([,var ,val-expr]) ,body-expr)
     ; Transform let into application: same as the one above, its just more direct to the specification given
-     (eval-expr `(@ (lambda (,var) ,body-expr) ,val-expr) env)]
+     (eval-expr `(@ (lambda (,var) ,body-expr) ,val-expr) env store)]
     
-    ;; IF expression (for bonus recursive test)
+    ;; IF expression
+    ;; IF-TRUE: Γ; Σ ⊢ e1 ⇒ true ; Σ1  =>  Γ; Σ1 ⊢ e2 ⇒ v ; Σ'
+    ;; IF-FALSE: Γ; Σ ⊢ e1 ⇒ false ; Σ1  =>  Γ; Σ1 ⊢ e3 ⇒ v ; Σ'
     [`(if ,cond-expr ,then-expr ,else-expr)
-     (let ([cond-val (eval-expr cond-expr env)])
+     (let-values ([(cond-val store1) (eval-expr cond-expr env store)])
        (if cond-val
-           (eval-expr then-expr env)
-           (eval-expr else-expr env)))]
+           (eval-expr then-expr env store1)
+           (eval-expr else-expr env store1)))]
     
     ;; APP: Function application @ e0 e1 ... en
     ;; Syntax: (@ f arg1 arg2 ...)
+    ;; Threads store through function eval, then all args, then application
     [`(@ ,e0 ,args ...)
-     (let ([func (eval-expr e0 env)]
-           [arg-vals (map (lambda (arg) (eval-expr arg env)) args)])
-       (apply-func func arg-vals))]
+     (let-values ([(func store1) (eval-expr e0 env store)])
+       ; Thread store through all argument evaluations using foldl
+       ; foldl accumulator is a cons of (vals . store)
+       (let* ([result (foldl (lambda (arg acc)
+                               (let ([vals (car acc)]
+                                     [st (cdr acc)])
+                                 (let-values ([(v st2) (eval-expr arg env st)])
+                                   (cons (cons v vals) st2))))
+                             (cons '() store1)
+                             args)]
+              [arg-vals (reverse (car result))]
+              [store2 (cdr result)])
+         (apply-func func arg-vals store2)))]
     
     ;; The following commented lines were a convenience feature which wasnt given in the assignment
     ;; what it did was it allowed (+ 1 2) instead of (@ + 1 2) as well
@@ -112,36 +161,36 @@
     
     [_ (error 'eval-expr "Unknown expression: ~a" expr)]))
 
-;; apply-func : Value (Listof Value) -> Value
-;; Applies a function (closure or primitive) to arguments
-(define (apply-func func args)
+;; apply-func : Value (Listof Value) Store -> (values Value Store)
+;; Applies a function (closure or primitive) to arguments, threading store
+(define (apply-func func args store)
   (match func
-    ;; APPprim: Apply primitive operation
+    ;; APPprim: Apply primitive operation (store unchanged)
     [(primitive name f)
-     (apply f args)]
+     (values (apply f args) store)]
     
     ;; APP: Apply closure
-    ;; Γ ⊢ e0 ⇒ ⟨x, e, Γ'⟩  Γ ⊢ ei ⇒ vi  α = { xi ↦ vi }  αΓ' ⊢ e ⇒ v
+    ;; Threads store through body evaluation
     [(closure params body captured-env)
      (cond
        ;; Multi-argument application
        [(= (length params) (length args))
         (let ([extended-env (extend-env* params args captured-env)])
-          (eval-expr body extended-env))]
+          (eval-expr body extended-env store))]
        
-       ;; Currying: fewer arguments than parameters
+       ;; Currying: fewer arguments than parameters (returns new closure, store unchanged)
        [(< (length args) (length params))
         (let* ([used-params (take params (length args))]
                [remaining-params (drop params (length args))]
                [extended-env (extend-env* used-params args captured-env)])
-          (closure remaining-params body extended-env))]
+          (values (closure remaining-params body extended-env) store))]
        
-       ;; Too many arguments: apply in stages
+       ;; Too many arguments: apply in stages, threading store
        [(> (length args) (length params))
         (let* ([first-args (take args (length params))]
-               [remaining-args (drop args (length params))]
-               [result (apply-func func first-args)])
-          (apply-func result remaining-args))])]
+               [remaining-args (drop args (length params))])
+          (let-values ([(result store1) (apply-func func first-args store)])
+            (apply-func result remaining-args store1)))])]
     
     [_ (error 'apply-func "Cannot apply non-function: ~a" func)]))
 
@@ -150,9 +199,10 @@
 ;; ============================================================================
 
 ;; eval : Expr -> Value
-;; Evaluates an expression in the initial environment
+;; Evaluates an expression in the initial environment with empty store
 (define (eval expr)
-  (eval-expr expr initial-env))
+  (let-values ([(v final-store) (eval-expr expr initial-env empty-store)])
+    v))
 
 
 ;; Pretty print results
@@ -162,6 +212,8 @@
      (format "<closure: params=~a>" params)]
     [(primitive name _)
      (format "<primitive: ~a>" name)]
+    [(loc addr)
+     (format "<loc:~a>" addr)]
     [_ (format "~a" v)]))
 
 ;; Interactive interpreter REPL
