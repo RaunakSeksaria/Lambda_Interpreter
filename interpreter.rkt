@@ -115,12 +115,7 @@
     [(? number? n) n]
     
     ;; VAR: Γ(x) = v  =>  Γ; Σ ⊢ x ⇒ v ; Σ
-    ;; Auto-dereference locations (for letrec support)
-    [(? symbol? x)
-     (let ([v (lookup-env x env)])
-       (match v
-         [(loc addr) (lookup-store! v)]  ; If bound to location, deref it
-         [_ v]))]
+    [(? symbol? x) (lookup-env x env)]
     
     ;; ABS: Γ; Σ ⊢ (λ x. e) ⇒ ⟨x, e, Γ⟩ ; Σ
     ;; Syntax: (lambda (x1 x2 ...) body)
@@ -151,9 +146,13 @@
     ;; Syntax: (@ f arg1 arg2 ...)
     ;; Much simpler with mutable store - no threading needed!
     [`(@ ,e0 ,args ...)
-     (let ([func (eval-expr e0 env)]
+     (let ([func-val (eval-expr e0 env)]
            [arg-vals (map (lambda (arg) (eval-expr arg env)) args)])
-       (apply-func func arg-vals))]
+       ; Auto-dereference function if it's a location (for letrec support)
+       (let ([func (match func-val
+                     [(loc addr) (lookup-store! func-val)]
+                     [_ func-val])])
+         (apply-func func arg-vals)))]
     
     ;; REF: Allocate a new location in the store
     ;; REF rule: Γ; Σ ⊢ e ⇒ v ; Σ₀ l=create(Σ₀)  Σ₁=Σ₀[l↦v]
@@ -193,7 +192,7 @@
      (eval-expr e1 env)  ; Evaluate e1, discard result (but store is mutated)
      (eval-expr e2 env)] ; Return result of e2
     
-            ;; LET*: Sequential bindings (let* rule, lines 125-126 of spec)
+    ;; LET*: Sequential bindings (let* rule, lines 125-126 of spec)
     ;; LET*: Γ; Σ ⊢ e₁ ⇒ v₁ ; Σ₁  Γ₁ = Γ[x₁ ↦ v₁]  Γ₁; Σ₁ ⊢ e₂ ⇒ v₂ ; Σ₂ ...
     ;;       Γₖ; Σₖ ⊢ body ⇒ v ; Σ'
     ;; Syntax: (let* ([x1 e1] [x2 e2] ...) body)
@@ -481,6 +480,85 @@
                 (let ([g (lambda (z) (@ f z 10))])
                   (@ g 5)))
              15)
+  
+  ;; ============================================================================
+  ;; Assignment 4 Tests (from Appendix A)
+  ;; ============================================================================
+  
+  ;; Test 11: let* sequential binding
+  (test-case "let* sequential binding"
+             '(let* ([x 1] [y 2]) (@ + x y))
+             3)
+  
+  ;; Test 12: let* shadowing
+  (test-case "let* shadowing"
+             '(let* ([x 1] [x 2] [x 6]) x)
+             6)
+  
+  ;; Test 13: letrec factorial
+  (test-case "letrec factorial"
+             '(letrec ([fact (lambda (n)
+                              (if (@ == n 0)
+                                  1
+                                  (@ * n (@ fact (@ - n 1)))))])
+                (@ fact 5))
+             120)
+  
+  ;; Test 14: letrec mutual recursion (even/odd)
+  (test-case "letrec even/odd"
+             '(letrec ([even (lambda (n)
+                              (if (@ == n 0)
+                                  #t
+                                  (@ odd (@ - n 1))))]
+                      [odd (lambda (n)
+                             (if (@ == n 0)
+                                 #f
+                                 (@ even (@ - n 1))))])
+                (@ even 4))
+             #t)
+  
+  ;; Test 15: Store allocation & mutation
+  (test-case "Store allocation & mutation"
+             '(let ([r (ref 10)])
+                (seq (set r (@ + (deref r) 5))
+                     (deref r)))
+             15)
+  
+  ;; Test 16: Closures capturing locations
+  (test-case "Closures capturing locations"
+             '(let ([r (ref 10)])
+                (let ([adder (lambda (x) (set r (@ + (deref r) x)))])
+                  (seq (@ adder 5)
+                       (deref r))))
+             15)
+  
+  ;; Test 17: Sequencing
+  (test-case "Sequencing"
+             '(seq (ref 0) 42)
+             42)
+  
+  ;; Test 18: Store + recursion
+  (test-case "Store with recursion"
+             '(let ([counter (ref 0)])
+                (letrec ([inc (lambda ()
+                               (seq (set counter (@ + (deref counter) 1))
+                                    (deref counter)))])
+                  (seq (@ inc)
+                       (seq (@ inc)
+                            (@ inc)))))
+             3)
+  
+  ;; Test 19: Iterator using store
+  (test-case "Iterator using store"
+             '(let ([pos (ref 0)])
+                (let ([next (lambda ()
+                             (let ([current (deref pos)])
+                               (seq (set pos (@ + current 1))
+                                    current)))])
+                  (seq (@ next)
+                       (seq (@ next)
+                            (@ next)))))
+             2)
   
   (newline)
   (displayln "╔════════════════════════════════════════════╗")
