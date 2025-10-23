@@ -39,35 +39,42 @@
         (error 'lookup-env "Unbound variable: ~a" var))))
 
 ;; ============================================================================
-;; Store Operations
+;; Store Operations (MUTABLE)
 ;; ============================================================================
 
-;; empty-store : Store
-(define empty-store '())
+;; The global mutable store - a box containing an association list
+(define the-store (box '()))
 
-;; alloc-loc : Store -> (values Loc Store)
+;; reset-store! : -> Void
+;; Resets the store to empty (useful for fresh evaluation)
+(define (reset-store!)
+  (set-box! the-store '()))
+
+;; alloc-loc! : -> Loc
 ;; Allocates a fresh location by finding max address + 1
-(define (alloc-loc store)
-  (let ([next-addr (+ 1 (foldl max -1 (map car store)))])
-    (values (loc next-addr) store)))
+;; Mutates the store directly
+(define (alloc-loc!)
+  (let* ([store (unbox the-store)]
+         [next-addr (+ 1 (foldl max -1 (map car store)))])
+    (loc next-addr)))
 
-;; lookup-store : Loc Store -> Value
+;; lookup-store! : Loc -> Value
 ;; Retrieves the value at a location in the store
-(define (lookup-store l store)
+(define (lookup-store! l)
   (match l
     [(loc addr)
-     (let ([binding (assoc addr store)])
+     (let ([binding (assoc addr (unbox the-store))])
        (if binding
            (cdr binding)
            (error 'lookup-store "Unbound location: ~a" addr)))]
     [_ (error 'lookup-store "Not a location: ~a" l)]))
 
-;; update-store : Loc Value Store -> Store
-;; Updates the store with a new binding (immutable - returns new store)
-(define (update-store l v store)
+;; update-store! : Loc Value -> Void
+;; Updates the store with a new binding (mutates global store)
+(define (update-store! l v)
   (match l
     [(loc addr)
-     (cons (cons addr v) store)]
+     (set-box! the-store (cons (cons addr v) (unbox the-store)))]
     [_ (error 'update-store "Not a location: ~a" l)]))
 
 ;; ============================================================================
@@ -96,21 +103,24 @@
 ;; Evaluator
 ;; ============================================================================
 
-;; eval-expr : Expr Env Store -> (values Value Store)
+;; eval-expr : Expr Env -> Value
 ;; Implements the evaluation relation Γ; Σ ⊢ e ⇒ v ; Σ'
-(define (eval-expr expr env store)
+;; Store is now mutable and accessed via the-store
+(define (eval-expr expr env)
   (match expr
+    ;; BOOL: Γ; Σ ⊢ true/false ⇒ true/false ; Σ
+    [(? boolean? b) b]
+    
     ;; NUM: Γ; Σ ⊢ n ⇒ n ; Σ
-    [(? number? n) (values n store)]
+    [(? number? n) n]
     
     ;; VAR: Γ(x) = v  =>  Γ; Σ ⊢ x ⇒ v ; Σ
-    ;; this interpreter calls it VAR instead of previous ID
-    [(? symbol? x) (values (lookup-env x env) store)]
+    [(? symbol? x) (lookup-env x env)]
     
     ;; ABS: Γ; Σ ⊢ (λ x. e) ⇒ ⟨x, e, Γ⟩ ; Σ
     ;; Syntax: (lambda (x1 x2 ...) body)
     [`(lambda (,params ...) ,body)
-     (values (closure params body env) store)]
+     (closure params body env)]
     
     ;; Extended syntax: let
     ;; let ([x e]) e' ≜ @ (λ x. e') e
@@ -120,35 +130,63 @@
       ; (eval-expr body-expr (extend-env var val env)))]
 
     [`(let ([,var ,val-expr]) ,body-expr)
-    ; Transform let into application: same as the one above, its just more direct to the specification given
-     (eval-expr `(@ (lambda (,var) ,body-expr) ,val-expr) env store)]
+     ; Transform let into application
+     (eval-expr `(@ (lambda (,var) ,body-expr) ,val-expr) env)]
     
     ;; IF expression
     ;; IF-TRUE: Γ; Σ ⊢ e1 ⇒ true ; Σ1  =>  Γ; Σ1 ⊢ e2 ⇒ v ; Σ'
     ;; IF-FALSE: Γ; Σ ⊢ e1 ⇒ false ; Σ1  =>  Γ; Σ1 ⊢ e3 ⇒ v ; Σ'
     [`(if ,cond-expr ,then-expr ,else-expr)
-     (let-values ([(cond-val store1) (eval-expr cond-expr env store)])
+     (let ([cond-val (eval-expr cond-expr env)])
        (if cond-val
-           (eval-expr then-expr env store1)
-           (eval-expr else-expr env store1)))]
+           (eval-expr then-expr env)
+           (eval-expr else-expr env)))]
     
     ;; APP: Function application @ e0 e1 ... en
     ;; Syntax: (@ f arg1 arg2 ...)
-    ;; Threads store through function eval, then all args, then application
+    ;; Much simpler with mutable store - no threading needed!
     [`(@ ,e0 ,args ...)
-     (let-values ([(func store1) (eval-expr e0 env store)])
-       ; Thread store through all argument evaluations using foldl
-       ; foldl accumulator is a cons of (vals . store)
-       (let* ([result (foldl (lambda (arg acc)
-                               (let ([vals (car acc)]
-                                     [st (cdr acc)])
-                                 (let-values ([(v st2) (eval-expr arg env st)])
-                                   (cons (cons v vals) st2))))
-                             (cons '() store1)
-                             args)]
-              [arg-vals (reverse (car result))]
-              [store2 (cdr result)])
-         (apply-func func arg-vals store2)))]
+     (let ([func (eval-expr e0 env)]
+           [arg-vals (map (lambda (arg) (eval-expr arg env)) args)])
+       (apply-func func arg-vals))]
+    
+    ;; REF: Allocate a new location in the store
+    ;; REF rule: Γ; Σ ⊢ e ⇒ v ; Σ₀ l=create(Σ₀)  Σ₁=Σ₀[l↦v]
+    ;;           => Γ; Σ ⊢ ref e ⇒ loc l ; Σ₁
+    [`(ref ,e)
+     (let ([v (eval-expr e env)]
+           [l (alloc-loc!)])
+       (update-store! l v)
+       l)]
+    
+    ;; DEREF: Retrieve value from a location
+    ;; DEREF rule: Γ; Σ ⊢ e ⇒ loc l ; Σ₀  v=lookup_store(Σ₀,l)
+    ;;             => Γ; Σ ⊢ deref e ⇒ v ; Σ₀
+    [`(deref ,e)
+     (let ([v (eval-expr e env)])
+       (match v
+         [(loc addr)
+          (lookup-store! v)]
+         [_ (error 'deref "Not a location: ~a" v)]))]
+    
+    ;; SET: Update a location in the store
+    ;; SET rule: Γ; Σ ⊢ e₁ ⇒ loc l ; Σ₁  Γ; Σ₁ ⊢ e₂ ⇒ v ; Σ₂  Σ₃=Σ₂[l↦v]
+    ;;           => Γ; Σ ⊢ set e₁ e₂ ⇒ v ; Σ₃
+    [`(set ,e1 ,e2)
+     (let ([l (eval-expr e1 env)]
+           [v (eval-expr e2 env)])
+       (match l
+         [(loc addr)
+          (update-store! l v)
+          v]  ; Return the assigned value
+         [_ (error 'set "First argument not a location: ~a" l)]))]
+    
+    ;; SEQ: Sequencing - evaluate e1, discard result, then evaluate e2
+    ;; SEQ rule: Γ; Σ ⊢ e₁ ⇒ v₁ ; Σ₁  Γ; Σ₁ ⊢ e₂ ⇒ v₂ ; Σ₂
+    ;;           => Γ; Σ ⊢ e₁ ; e₂ ⇒ v₂ ; Σ₂
+    [`(seq ,e1 ,e2)
+     (eval-expr e1 env)  ; Evaluate e1, discard result (but store is mutated)
+     (eval-expr e2 env)] ; Return result of e2
     
     ;; The following commented lines were a convenience feature which wasnt given in the assignment
     ;; what it did was it allowed (+ 1 2) instead of (@ + 1 2) as well
@@ -161,36 +199,36 @@
     
     [_ (error 'eval-expr "Unknown expression: ~a" expr)]))
 
-;; apply-func : Value (Listof Value) Store -> (values Value Store)
-;; Applies a function (closure or primitive) to arguments, threading store
-(define (apply-func func args store)
+;; apply-func : Value (Listof Value) -> Value
+;; Applies a function (closure or primitive) to arguments
+;; Store is global and mutable, so no threading needed
+(define (apply-func func args)
   (match func
-    ;; APPprim: Apply primitive operation (store unchanged)
+    ;; APPprim: Apply primitive operation
     [(primitive name f)
-     (values (apply f args) store)]
+     (apply f args)]
     
     ;; APP: Apply closure
-    ;; Threads store through body evaluation
     [(closure params body captured-env)
      (cond
        ;; Multi-argument application
        [(= (length params) (length args))
         (let ([extended-env (extend-env* params args captured-env)])
-          (eval-expr body extended-env store))]
+          (eval-expr body extended-env))]
        
-       ;; Currying: fewer arguments than parameters (returns new closure, store unchanged)
+       ;; Currying: fewer arguments than parameters (returns new closure)
        [(< (length args) (length params))
         (let* ([used-params (take params (length args))]
                [remaining-params (drop params (length args))]
                [extended-env (extend-env* used-params args captured-env)])
-          (values (closure remaining-params body extended-env) store))]
+          (closure remaining-params body extended-env))]
        
-       ;; Too many arguments: apply in stages, threading store
+       ;; Too many arguments: apply in stages
        [(> (length args) (length params))
         (let* ([first-args (take args (length params))]
-               [remaining-args (drop args (length params))])
-          (let-values ([(result store1) (apply-func func first-args store)])
-            (apply-func result remaining-args store1)))])]
+               [remaining-args (drop args (length params))]
+               [result (apply-func func first-args)])
+          (apply-func result remaining-args))])]
     
     [_ (error 'apply-func "Cannot apply non-function: ~a" func)]))
 
@@ -199,10 +237,11 @@
 ;; ============================================================================
 
 ;; eval : Expr -> Value
-;; Evaluates an expression in the initial environment with empty store
+;; Evaluates an expression in the initial environment
+;; Resets the store before each evaluation
 (define (eval expr)
-  (let-values ([(v final-store) (eval-expr expr initial-env empty-store)])
-    v))
+  (reset-store!)
+  (eval-expr expr initial-env))
 
 
 ;; Pretty print results
