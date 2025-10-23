@@ -192,9 +192,10 @@
      (eval-expr e1 env)  ; Evaluate e1, discard result (but store is mutated)
      (eval-expr e2 env)] ; Return result of e2
     
-    ;; LET*: Sequential bindings (let* rule, lines 125-126 of spec)
+    ;; LET*: Sequential bindings (LET1* rule, lines 125-126 of spec)
     ;; LET*: Γ; Σ ⊢ e₁ ⇒ v₁ ; Σ₁  Γ₁ = Γ[x₁ ↦ v₁]  Γ₁; Σ₁ ⊢ e₂ ⇒ v₂ ; Σ₂ ...
     ;;       Γₖ; Σₖ ⊢ body ⇒ v ; Σ'
+    ;; Each binding can reference previous bindings
     ;; Syntax: (let* ([x1 e1] [x2 e2] ...) body)
     [`(let* (,bindings ...) ,body)
      (let ([final-env
@@ -205,6 +206,23 @@
                           (extend-env var val env))]))
                    env
                    bindings)])
+       (eval-expr body final-env))]
+    
+    ;; LET*2: Alternative let* rule (LET2* from Section 8.1)
+    ;; LET*2: Each binding uses ORIGINAL environment, not extended one
+    ;; This means bindings cannot reference previous bindings
+    ;; Syntax: (let*2 ([x1 e1] [x2 e2] ...) body)
+    [`(let*2 (,bindings ...) ,body)
+     (let* ([vars (map car bindings)]
+            [exprs (map cadr bindings)]
+            ; Evaluate ALL expressions in the ORIGINAL environment
+            [vals (map (lambda (expr) (eval-expr expr env)) exprs)]
+            ; Then extend environment with all bindings at once
+            [final-env (foldl (lambda (var val env)
+                                (extend-env var val env))
+                              env
+                              vars
+                              vals)])
        (eval-expr body final-env))]
     
     ;; LETREC: Mutual recursion using STORE-BASED strategy
@@ -334,13 +352,14 @@
          (displayln "  Let:      (let ([x val]) body)")
          (displayln "  If:       (if cond then else)")
          (newline)
-         (displayln "Assignment 4 Features:")
-         (displayln "  let*:     (let* ([x1 e1] [x2 e2] ...) body)")
-         (displayln "  letrec:   (letrec ([f1 e1] [f2 e2] ...) body)")
-         (displayln "  ref:      (ref expr)           ; allocate location")
-         (displayln "  deref:    (deref loc)          ; read from location")
-         (displayln "  set:      (set loc val)        ; update location")
-         (displayln "  seq:      (seq expr1 expr2)    ; sequencing")
+        (displayln "Assignment 4 Features:")
+        (displayln "  let*:     (let* ([x1 e1] [x2 e2] ...) body)   ; sequential bindings")
+        (displayln "  let*2:    (let*2 ([x1 e1] [x2 e2] ...) body)  ; alternative let* (no dependencies)")
+        (displayln "  letrec:   (letrec ([f1 e1] [f2 e2] ...) body) ; mutual recursion")
+        (displayln "  ref:      (ref expr)           ; allocate location")
+        (displayln "  deref:    (deref loc)          ; read from location")
+        (displayln "  set:      (set loc val)        ; update location")
+        (displayln "  seq:      (seq expr1 expr2)    ; sequencing")
          (newline)
          (loop)]
         
@@ -351,11 +370,14 @@
          (displayln "  (let ([x 10]) (@ + x 5))")
          (displayln "  (@ (@ (lambda (x) (lambda (y) (@ + x y))) 3) 4)")
          (newline)
-         (displayln "Assignment 4 Examples:")
-         (displayln "  ;; let* - sequential bindings")
-         (displayln "  (let* ([x 1] [y (@ + x 1)]) y)")
-         (newline)
-         (displayln "  ;; letrec - mutual recursion")
+        (displayln "Assignment 4 Examples:")
+        (displayln "  ;; let* - sequential bindings (y can see x)")
+        (displayln "  (let* ([x 1] [y (@ + x 1)]) y)  ; => 2")
+        (newline)
+        (displayln "  ;; let*2 - independent bindings (y cannot see x)")
+        (displayln "  (let*2 ([x 5] [y 10]) (@ + x y))  ; => 15")
+        (newline)
+        (displayln "  ;; letrec - mutual recursion")
          (displayln "  (letrec ([fact (lambda (n)")
          (displayln "                   (if (@ == n 0) 1")
          (displayln "                       (@ * n (@ fact (@ - n 1)))))])")
@@ -581,6 +603,31 @@
                        (seq (@ next)
                             (@ next)))))
              2)
+  
+  ;; ============================================================================
+  ;; Phase 10.1: Alternative let* Rule Comparison
+  ;; ============================================================================
+  
+  ;; Test 20: let*2 - bindings use original environment
+  (test-case "let*2 without dependencies"
+             '(let ([x 10])
+                (let*2 ([y 1] [z 2])
+                  (@ + (@ + x y) z)))
+             13)
+  
+  ;; Test 21: let* vs let*2 difference
+  ;; let* allows y to reference x (sequential)
+  (test-case "let* with dependency"
+             '(let* ([x 5] [y (@ + x 1)])
+                y)
+             6)
+  
+  ;; Test 22: let*2 where later bindings can't see earlier ones
+  ;; This should work because both bindings are independent
+  (test-case "let*2 independent bindings"
+             '(let*2 ([x 5] [y 10])
+                (@ + x y))
+             15)
   
   (newline)
   (displayln "╔════════════════════════════════════════════╗")
