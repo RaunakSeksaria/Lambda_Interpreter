@@ -115,7 +115,12 @@
     [(? number? n) n]
     
     ;; VAR: Γ(x) = v  =>  Γ; Σ ⊢ x ⇒ v ; Σ
-    [(? symbol? x) (lookup-env x env)]
+    ;; Auto-dereference locations (for letrec support)
+    [(? symbol? x)
+     (let ([v (lookup-env x env)])
+       (match v
+         [(loc addr) (lookup-store! v)]  ; If bound to location, deref it
+         [_ v]))]
     
     ;; ABS: Γ; Σ ⊢ (λ x. e) ⇒ ⟨x, e, Γ⟩ ; Σ
     ;; Syntax: (lambda (x1 x2 ...) body)
@@ -187,6 +192,49 @@
     [`(seq ,e1 ,e2)
      (eval-expr e1 env)  ; Evaluate e1, discard result (but store is mutated)
      (eval-expr e2 env)] ; Return result of e2
+    
+            ;; LET*: Sequential bindings (let* rule, lines 125-126 of spec)
+    ;; LET*: Γ; Σ ⊢ e₁ ⇒ v₁ ; Σ₁  Γ₁ = Γ[x₁ ↦ v₁]  Γ₁; Σ₁ ⊢ e₂ ⇒ v₂ ; Σ₂ ...
+    ;;       Γₖ; Σₖ ⊢ body ⇒ v ; Σ'
+    ;; Syntax: (let* ([x1 e1] [x2 e2] ...) body)
+    [`(let* (,bindings ...) ,body)
+     (let ([final-env
+            (foldl (lambda (binding env)
+                     (match binding
+                       [`(,var ,expr)
+                        (let ([val (eval-expr expr env)])
+                          (extend-env var val env))]))
+                   env
+                   bindings)])
+       (eval-expr body final-env))]
+    
+    ;; LETREC: Mutual recursion using STORE-BASED strategy
+    ;; We use the mutable store to break the recursive cycle:
+    ;; 1. Allocate locations for each function
+    ;; 2. Bind names to those locations in environment
+    ;; 3. Evaluate expressions (closures can now find locations)
+    ;; 4. Store actual values at those locations
+    ;; 5. Evaluate body
+    ;; Syntax: (letrec ([f1 e1] [f2 e2] ...) body)
+    [`(letrec (,bindings ...) ,body)
+     (let* ([vars (map car bindings)]
+            [exprs (map cadr bindings)]
+            ; Step 1: Allocate a location for each function
+            [locs (map (lambda (_) (alloc-loc!)) vars)]
+            ; Step 2: Bind each name to its location
+            [rec-env (foldl (lambda (var loc env)
+                              (extend-env var loc env))
+                            env
+                            vars
+                            locs)]
+            ; Step 3: Evaluate expressions in recursive environment
+            ;         (they capture rec-env which has locations)
+            [vals (map (lambda (expr) (eval-expr expr rec-env)) exprs)])
+       ; Step 4: Store actual values at their locations
+       ; NOTE: Reverse vals to match the order foldl creates bindings
+       (for-each (lambda (loc val) (update-store! loc val)) locs (reverse vals))
+       ; Step 5: Evaluate body - functions will deref their locations
+       (eval-expr body rec-env))]
     
     ;; The following commented lines were a convenience feature which wasnt given in the assignment
     ;; what it did was it allowed (+ 1 2) instead of (@ + 1 2) as well
