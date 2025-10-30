@@ -96,84 +96,15 @@ This interpreter extends a basic λ-calculus with:
 ## Annotated AST Example
 
 ### Example: letrec factorial
-
 **Expression:**
 ```racket
 (letrec ([fact (lambda (n)
                  (if (@ == n 0)
                      1
                      (@ * n (@ fact (@ - n 1)))))])
-  (@ fact 5))
+  (@ fact 2))
 ```
-
-### Step-by-Step Execution with Store Snapshots
-
-**Initial State:**
-```
-Γ = {+, -, *, /, ==, ...}  ; Initial environment with primitives
-Σ = {}                      ; Empty store
-```
-
-**Step 1: Allocate location for `fact`**
-```
-l₀ = alloc-loc!()
-Σ = {}                      ; Store unchanged yet
-```
-
-**Step 2: Extend environment with location binding**
-```
-Γ_rec = Γ[fact ↦ loc(0)]
-```
-
-**Step 3: Evaluate lambda in recursive environment**
-```
-val = ⟨(n), if..., Γ_rec⟩   ; Closure captures Γ_rec (which has fact ↦ loc(0))
-```
-
-**Step 4: Store closure at location**
-```
-update-store!(loc(0), val)
-Σ = {0 ↦ ⟨(n), if..., Γ_rec⟩}
-```
-
-**Step 5: Evaluate body `(@ fact 5)` in Γ_rec**
-```
-fact → loc(0)  [lookup in Γ_rec]
-→ auto-dereference in APP
-→ ⟨(n), if..., Γ_rec⟩  [lookup in Σ]
-```
-
-**Step 6: Apply closure to 5**
-```
-Γ' = Γ_rec[n ↦ 5]
-eval (if (@ == n 0) 1 (@ * n (@ fact (@ - n 1)))) in Γ'
-```
-
-**Step 7: Recursive call**
-```
-(@ fact 4) → fact → loc(0) → ⟨(n), if..., Γ_rec⟩ → apply to 4
-(@ fact 3) → ...
-(@ fact 2) → ...
-(@ fact 1) → ...
-(@ fact 0) → returns 1 (base case)
-```
-
-**Final computation:**
-```
-0! = 1
-1! = 1 * 1 = 1
-2! = 2 * 1 = 2
-3! = 3 * 2 = 6
-4! = 4 * 6 = 24
-5! = 5 * 24 = 120
-```
-
-**Store remains:**
-```
-Σ = {0 ↦ ⟨(n), if..., Γ_rec⟩}
-```
-
----
+![letrec fact](image.png)
 
 ## Primitives Documentation
 
@@ -371,63 +302,6 @@ Our mutable store-based approach particularly shines with `letrec`, providing tr
 
 ---
 
-## Challenges and Solutions
-
-### Challenge 1: Store Threading Complexity
-
-**Problem:** Initial immutable store approach required threading store through every function call, using complex `let-values` and `foldl` with cons pairs.
-
-**Solution:** Switched to mutable global store using `box`. This eliminated:
-- All `let-values` destructuring
-- Complex accumulator patterns in `foldl`
-- Manual store threading
-
-**Result:** Code became 50% shorter and much more readable.
-
-### Challenge 2: letrec Circular Dependencies
-
-**Problem:** Functions need to reference themselves and each other, but closures capture environment at creation time.
-
-**Solution:** Store-based letrec strategy:
-1. Allocate locations for functions
-2. Bind names to locations (not closures)
-3. Evaluate lambdas (they capture env with locations)
-4. Store closures at their locations
-5. Auto-dereference in function position
-
-**Result:** Transparent mutual recursion without manual fixed-point combinators.
-
-### Challenge 3: Selective Auto-Dereference
-
-**Problem:** Auto-dereferencing all variable lookups broke `ref` (couldn't hold locations in variables). Not auto-dereferencing broke `letrec` (couldn't call functions).
-
-**Solution:** Only auto-dereference in function application position:
-```racket
-;; In APP case:
-(let ([func-val (eval-expr e0 env)])
-  (let ([func (match func-val
-                [(loc addr) (lookup-store! func-val)]
-                [_ func-val])])
-    (apply-func func arg-vals)))
-```
-
-**Result:** Both `ref` and `letrec` work perfectly.
-
-### Challenge 4: foldl Ordering Bug in letrec
-
-**Problem:** `foldl` builds environment in reverse order, but `map` evaluates expressions in forward order. This caused functions to be stored at wrong locations.
-
-**Solution:** Reverse the `vals` list before storing:
-```racket
-(for-each (lambda (loc val) (update-store! loc val)) 
-          locs 
-          (reverse vals))
-```
-
-**Result:** Functions correctly bound to their intended locations.
-
----
-
 ### Section 8.2: `set!` Design Comparison
 
 #### Two Designs for Mutable Variables
@@ -609,6 +483,77 @@ In our implementation, `set!` is implemented as a hybrid approach:
 3. This simulates mutable variables while keeping the environment structure immutable
 
 This approach gives us the convenience of `set!` syntax while maintaining the implementation simplicity of a mutable store.
+
+---
+
+
+
+### Step-by-Step Execution with Store Snapshots
+
+**Initial State:**
+```
+Γ = {+, -, *, /, ==, ...}  ; Initial environment with primitives
+Σ = {}                      ; Empty store
+```
+
+**Step 1: Allocate location for `fact`**
+```
+l₀ = alloc-loc!()
+Σ = {}                      ; Store unchanged yet
+```
+
+**Step 2: Extend environment with location binding**
+```
+Γ_rec = Γ[fact ↦ loc(0)]
+```
+
+**Step 3: Evaluate lambda in recursive environment**
+```
+val = ⟨(n), if..., Γ_rec⟩   ; Closure captures Γ_rec (which has fact ↦ loc(0))
+```
+
+**Step 4: Store closure at location**
+```
+update-store!(loc(0), val)
+Σ = {0 ↦ ⟨(n), if..., Γ_rec⟩}
+```
+
+**Step 5: Evaluate body `(@ fact 5)` in Γ_rec**
+```
+fact → loc(0)  [lookup in Γ_rec]
+→ auto-dereference in APP
+→ ⟨(n), if..., Γ_rec⟩  [lookup in Σ]
+```
+
+**Step 6: Apply closure to 5**
+```
+Γ' = Γ_rec[n ↦ 5]
+eval (if (@ == n 0) 1 (@ * n (@ fact (@ - n 1)))) in Γ'
+```
+
+**Step 7: Recursive call**
+```
+(@ fact 4) → fact → loc(0) → ⟨(n), if..., Γ_rec⟩ → apply to 4
+(@ fact 3) → ...
+(@ fact 2) → ...
+(@ fact 1) → ...
+(@ fact 0) → returns 1 (base case)
+```
+
+**Final computation:**
+```
+0! = 1
+1! = 1 * 1 = 1
+2! = 2 * 1 = 2
+3! = 3 * 2 = 6
+4! = 4 * 6 = 24
+5! = 5 * 24 = 120
+```
+
+**Store remains:**
+```
+Σ = {0 ↦ ⟨(n), if..., Γ_rec⟩}
+```
 
 ---
 
