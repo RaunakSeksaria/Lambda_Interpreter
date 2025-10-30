@@ -6,10 +6,8 @@
 2. [Implementation Choices](#implementation-choices)
 3. [Annotated AST Example](#annotated-ast-example)
 4. [Primitives Documentation](#primitives-documentation)
-5. [Phase 10 Explorations](#phase-10-explorations)
+5. [Section 8](#section-8-discussions)
 6. [Challenges and Solutions](#challenges-and-solutions)
-7. [How to Run](#how-to-run)
-8. [Section 8.2](#section-82-set-design-comparison)
 ---
 
 ## Overview
@@ -212,9 +210,9 @@ eval (if (@ == n 0) 1 (@ * n (@ fact (@ - n 1)))) in Γ'
 
 ---
 
-## Phase 10 Explorations
+## Section 8 Discussions
 
-### 10.1: Alternative let* Rule (LET2*)
+### 8.1: Alternative let* Rule (LET2*)
 
 #### Implementation
 
@@ -283,7 +281,7 @@ We implemented **two versions** of `let*`:
 
 ---
 
-### 10.2: Minimalism Discussion
+### 8.3: Minimalism Discussion
 
 Can we encode the new constructs using simpler primitives?
 
@@ -373,88 +371,6 @@ Our mutable store-based approach particularly shines with `letrec`, providing tr
 
 ---
 
-### 10.3: Alternative set! Design
-
-#### Current Design: Explicit Locations
-
-**Syntax:** `(set location-expr value-expr)`
-
-```racket
-(let ([r (ref 10)])
-  (set r 20)
-  (deref r))  ; => 20
-```
-
-**Pros:**
-- ✓ Explicit about what's mutable
-- ✓ Supports aliasing (multiple variables reference same location)
-- ✓ First-class locations can be passed around
-- ✓ Clear separation: variables vs. locations
-
-**Cons:**
-- ✗ More verbose
-- ✗ Need explicit `ref` and `deref`
-- ✗ Two-level indirection
-
-#### Alternative: Variable-Based set!
-
-**Syntax:** `(set! variable-name value-expr)`
-
-```racket
-(let ([x 10])
-  (set! x 20)
-  x)  ; => 20
-```
-
-**Implementation sketch:**
-```racket
-[`(set! ,var ,expr)
- ; Would need to modify environment entry in-place
- ; OR store variables in store and track in environment
- ...]
-```
-
-**Pros:**
-- ✓ Simpler syntax
-- ✓ Familiar to Scheme/Lisp users
-- ✓ No explicit ref/deref needed
-
-**Cons:**
-- ✗ No aliasing support
-- ✗ Can't pass mutable references
-- ✗ Requires mutable environments or environment-as-store
-- ✗ Less explicit about mutation
-
-#### Comparison Example
-
-**Aliasing with explicit locations:**
-```racket
-(let ([r (ref 0)])
-  (let ([a r]
-        [b r])
-    (seq (set a 5)
-         (deref b))))  ; => 5 (b sees change through shared location)
-```
-
-**Would NOT work with set!:**
-```racket
-(let ([x 0])
-  (let ([a x]  ; a gets VALUE 0
-        [b x]) ; b gets VALUE 0
-    (seq (set! a 5)
-         b)))  ; => 0 (b doesn't see change, they're independent)
-```
-
-#### Our Choice: Explicit Locations
-
-We chose **explicit locations** because:
-1. **Full expressiveness:** Supports aliasing and first-class references
-2. **Clear semantics:** Easy to understand when mutation occurs
-3. **Matches assignment:** Spec uses ref/deref/set
-4. **More powerful:** Can implement set! using ref/deref, but not vice versa
-
----
-
 ## Challenges and Solutions
 
 ### Challenge 1: Store Threading Complexity
@@ -512,34 +428,9 @@ We chose **explicit locations** because:
 
 ---
 
-## How to Run
-### Running the Interpreter
+### Section 8.2: `set!` Design Comparison
 
-**Interactive REPL:**
-```bash
-racket interpreter.rkt
-```
-
-**Run specific expression:**
-```bash
-racket -e '(require "./interpreter.rkt") (displayln (eval '\''(expr)))'
-```
-
-### Running Tests
-
-**All tests:**
-```bash
-racket interpreter.rkt <<< 'run-tests
-quit'
-```
-
-
-
----
-
-## Section 8.2: `set!` Design Comparison
-
-### Two Designs for Mutable Variables
+#### Two Designs for Mutable Variables
 
 #### Design 1: Location-based `set` (Original)
 ```scheme
