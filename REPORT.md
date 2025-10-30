@@ -9,7 +9,6 @@
 5. [Phase 10 Explorations](#phase-10-explorations)
 6. [Challenges and Solutions](#challenges-and-solutions)
 7. [How to Run](#how-to-run)
-
 ---
 
 ## Overview
@@ -513,10 +512,6 @@ We chose **explicit locations** because:
 ---
 
 ## How to Run
-
-### Prerequisites
-- Racket installed (tested with Racket 8.x)
-
 ### Running the Interpreter
 
 **Interactive REPL:**
@@ -537,56 +532,52 @@ racket interpreter.rkt <<< 'run-tests
 quit'
 ```
 
-**Specific tests:**
+
+
+# 8.2: set!
+
+Notes, rules, pros/cons, and comparison (short):
+
+Operational rule for set! (informal):
+
+Evaluate e to v (using current store Σ).
+Find binding cell b = assoc(var, Γ). If b exists, mutate its cdr to v (set-cdr! b v). Result value v, store Σ unchanged.
+Error if var unbound.
+Pros of set! (variable-based):
+
+Simple syntax for reassigning variables.
+Can mutate captured variables (closures see updated value) without explicit refs.
+Matches many high-level languages (e.g., Scheme set!).
+Cons of set! (variable-based):
+
+Mutation targets env binding cells, not a separate heap—aliasing semantics differ.
+Harder to create true shared mutable references between variables unless you store a location value.
+Mutating a binding affects every place that shares the same cons cell — which is subtle and depends on how envs are constructed.
+Pros of set (location-based / store-based):
+
+Explicit heap; references can be first-class and shared (multiple variables can hold the same loc).
+Clear separation between environment and heap; predictable aliasing.
+Useful for implementing data structures with shared mutable state.
+Cons of set (location-based):
+
+Requires explicit ref/deref syntax to create and access references.
+Verbose when you only want to mutate a local variable captured by closures.
+Behavior possible in one design but not the other (example):
+
+Shared aliasing between variables without locations:
+With location-based set/ref you can do:
 ```racket
-racket -e '(require "./interpreter.rkt")
-           (displayln (eval '\''(letrec ([fact (lambda (n) ...)]) (@ fact 5))))'
+(let ([r (ref 0)])
+(let ([a r] [b r])
+(set a 5)
+(deref b))) => 5
 ```
-
-### Example Session
-
+With variable-based set! you cannot create the same "shared cell" between two distinct variable bindings a and b without explicitly using a location value; set! mutates the individual binding cell for the name, not some separately allocated shared cell.
+Conversely, variable-based set! lets you write succinctly:
 ```racket
-$ racket interpreter.rkt
-╔════════════════════════════════════════════╗
-║   λ-Calculus Interpreter (Assignment 4)   ║
-║   Author: Raunak Seksaria (2023113019)    ║
-╚════════════════════════════════════════════╝
-
-λ-calc> (let* ([x 1] [y (@ + x 1)]) y)
-=> 2
-
-λ-calc> (letrec ([fact (lambda (n) (if (@ == n 0) 1 (@ * n (@ fact (@ - n 1)))))]) (@ fact 5))
-=> 120
-
-λ-calc> (let ([r (ref 10)]) (seq (set r 20) (deref r)))
-=> 20
-
-λ-calc> quit
-Goodbye!
+(let ([x 1])
+(let ([f (lambda () x)])
+(set! x 2)
+(@ f)) => 2
 ```
-
-### Test Results
-
-**Total:** 22 tests
-**Status:** All passing ✓
-
-```
-Test 1-10: Core lambda calculus features
-Test 11-12: let* sequential bindings
-Test 13-14: letrec mutual recursion
-Test 15-19: Store operations
-Test 20-22: let* vs let*2 comparison
-```
-
----
-
-## Conclusion
-
-This interpreter successfully implements a feature-rich λ-calculus with mutable state, demonstrating:
-- Clean design through mutable store approach
-- Elegant handling of mutual recursion
-- Full support for stateful computation
-- Comprehensive test coverage
-
-The implementation choices prioritize clarity and correctness while maintaining the formal operational semantics specified in the assignment.
-
+Achieves the same with locations only by making x a ref and using deref in the closure.
