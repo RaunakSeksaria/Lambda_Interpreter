@@ -9,6 +9,7 @@
 5. [Phase 10 Explorations](#phase-10-explorations)
 6. [Challenges and Solutions](#challenges-and-solutions)
 7. [How to Run](#how-to-run)
+8. [Section 8.2](#section-82-set-design-comparison)
 ---
 
 ## Overview
@@ -534,50 +535,189 @@ quit'
 
 
 
-# 8.2: set!
+---
 
-Notes, rules, pros/cons, and comparison (short):
+## Section 8.2: `set!` Design Comparison
 
-Operational rule for set! (informal):
+### Two Designs for Mutable Variables
 
-Evaluate e to v (using current store Σ).
-Find binding cell b = assoc(var, Γ). If b exists, mutate its cdr to v (set-cdr! b v). Result value v, store Σ unchanged.
-Error if var unbound.
-Pros of set! (variable-based):
+#### Design 1: Location-based `set` (Original)
+```scheme
+;; Syntax: (set loc-expr val-expr)
+;; Updates a store location with a new value
 
-Simple syntax for reassigning variables.
-Can mutate captured variables (closures see updated value) without explicit refs.
-Matches many high-level languages (e.g., Scheme set!).
-Cons of set! (variable-based):
+;; Rule:
+;; Γ; Σ ⊢ e₁ ⇒ loc l ; Σ₁
+;; Γ; Σ₁ ⊢ e₂ ⇒ v ; Σ₂
+;; Σ₃ = Σ₂[l ↦ v]
+;; ─────────────────────────────
+;; Γ; Σ ⊢ set e₁ e₂ ⇒ v ; Σ₃
 
-Mutation targets env binding cells, not a separate heap—aliasing semantics differ.
-Harder to create true shared mutable references between variables unless you store a location value.
-Mutating a binding affects every place that shares the same cons cell — which is subtle and depends on how envs are constructed.
-Pros of set (location-based / store-based):
+;; Example:
+(let ([r (ref 10)])
+  (seq (set r 20)
+       (deref r)))  ;; => 20
+```
 
-Explicit heap; references can be first-class and shared (multiple variables can hold the same loc).
-Clear separation between environment and heap; predictable aliasing.
-Useful for implementing data structures with shared mutable state.
-Cons of set (location-based):
+#### Design 2: Variable-based `set!` (New - Section 8.2)
+```scheme
+;; Syntax: (set! var-name val-expr)
+;; Updates the environment binding of a variable
 
-Requires explicit ref/deref syntax to create and access references.
-Verbose when you only want to mutate a local variable captured by closures.
-Behavior possible in one design but not the other (example):
+;; Rule (Conceptual - requires environment threading):
+;; Γ; Σ ⊢ e ⇒ v ; Σ'
+;; Γ' = Γ[x ↦ v]
+;; ─────────────────────────────
+;; Γ; Σ ⊢ set! x e ⇒ v ; Σ'
+;;
+;; In practice with immutable environments, we simulate by:
+;; 1. Looking up variable's current value
+;; 2. If it's a location, update the store at that location
+;; 3. Otherwise, allocate a new location and update the store
 
-Shared aliasing between variables without locations:
-With location-based set/ref you can do:
-```racket
+;; Example:
+(let ([x (ref 10)])
+  (seq (set! x 20)
+       (deref x)))  ;; => 20
+```
+
+### Adjusted Rules
+
+#### `set` (Location-based)
+- **Input**: Expression evaluating to location, expression for new value
+- **Effect**: Updates store at the given location
+- **Output**: New value
+- **Environment**: Unchanged
+- **Store**: Modified at specified location
+
+#### `set!` (Variable-based)
+- **Input**: Variable name (symbol), expression for new value
+- **Effect**: Updates variable's binding (simulated via store in our implementation)
+- **Output**: New value
+- **Environment**: Logically updated (Γ' = Γ[x ↦ v])
+- **Store**: Modified at variable's location
+
+### Pros and Cons Analysis
+
+#### Location-based `set` (Design 1)
+
+**Pros:**
+1. **Explicit aliasing**: Locations can be passed around and shared
+2. **Clean semantics**: Store is separate from environment
+3. **Functional purity**: Environment remains immutable
+4. **First-class references**: Locations are values that can be stored, returned, etc.
+
+**Cons:**
+1. **Verbose syntax**: Requires explicit `ref` and `deref`
+2. **Manual memory management**: User must track locations
+3. **Indirection overhead**: Always need `deref` to access values
+
+#### Variable-based `set!` (Design 2)
+
+**Pros:**
+1. **Convenient syntax**: More natural for imperative-style code
+2. **Familiar**: Similar to languages like Scheme, JavaScript
+3. **Less boilerplate**: No explicit `ref`/`deref` needed
+4. **Simpler mental model**: Variables are mutable like in imperative languages
+
+**Cons:**
+1. **Implementation complexity**: Requires environment threading or hybrid approach
+2. **Scope confusion**: Variable mutation affects only local scope
+3. **No aliasing**: Can't easily share mutable references
+4. **Breaks functional purity**: Environments become "mutable"
+
+### Comparison Examples
+
+#### Example 1: Counter with Aliasing
+
+**Only possible with `set` (location-based):**
+```scheme
+;; Two variables pointing to same location
 (let ([r (ref 0)])
-(let ([a r] [b r])
-(set a 5)
-(deref b))) => 5
+  (let ([counter1 r]
+        [counter2 r])
+    (seq (set counter1 (@ + (deref counter1) 1))
+         (deref counter2))))  ;; => 1 (counter2 sees counter1's change!)
 ```
-With variable-based set! you cannot create the same "shared cell" between two distinct variable bindings a and b without explicitly using a location value; set! mutates the individual binding cell for the name, not some separately allocated shared cell.
-Conversely, variable-based set! lets you write succinctly:
-```racket
-(let ([x 1])
-(let ([f (lambda () x)])
-(set! x 2)
-(@ f)) => 2
+
+**NOT possible with `set!` (variable-based):**
+```scheme
+;; Each variable has its own binding
+(let ([counter1 (ref 0)])
+  (let ([counter2 counter1])  ;; counter2 gets a copy of the location
+    (seq (set! counter1 (@ + (deref counter1) 1))
+         (deref counter2))))  ;; counter2 NOT automatically updated
 ```
-Achieves the same with locations only by making x a ref and using deref in the closure.
+
+**Why?** With `set!`, updating `counter1` changes its binding, but `counter2` has its own binding. With `set`, both variables point to the same location in the store.
+
+#### Example 2: Closure Captures
+
+**Different behavior with location-based vs variable-based:**
+
+```scheme
+;; Location-based (set):
+(let ([x (ref 10)])
+  (let ([getter (lambda () (deref x))]
+        [setter (lambda (v) (set x v))])
+    (seq (@ setter 20)
+         (@ getter))))  ;; => 20 (shared location)
+
+;; Variable-based (set!):
+(let ([x (ref 10)])
+  (let ([getter (lambda () (deref x))]
+        [setter (lambda (v) (set! x v))])
+    (seq (@ setter 20)
+         (@ getter))))  ;; Depends on implementation!
+                       ;; May be 10 if closures capture different bindings
+```
+
+#### Example 3: Function Return Values
+
+**Only natural with `set` (location-based):**
+```scheme
+;; Return a mutable reference
+(let ([make-cell (lambda (v) (ref v))])
+  (let ([cell (@ make-cell 42)])
+    (seq (set cell 100)
+         (deref cell))))  ;; => 100
+
+;; Returns a location that can be mutated externally
+```
+
+**Awkward with `set!`:**
+```scheme
+;; Can't easily return a "mutable variable"
+;; Variables exist only in their lexical scope
+```
+
+### Behavioral Differences Summary
+
+| Capability | `set` (Location-based) | `set!` (Variable-based) |
+|------------|----------------------|----------------------|
+| **Aliasing** | ✅ Multiple vars can share location | ❌ Each var has own binding |
+| **First-class refs** | ✅ Locations are values | ❌ Variables aren't values |
+| **Closure sharing** | ✅ Closures share locations | ⚠️ Depends on implementation |
+| **Return mutable** | ✅ Return locations easily | ❌ Can't return "variable" |
+| **Syntax simplicity** | ❌ Requires ref/deref | ✅ Direct mutation |
+| **Functional purity** | ✅ Environment immutable | ❌ Conceptually mutates env |
+
+### Key Insight
+
+The fundamental difference is:
+- **`set`** mutates the **store** (Σ) at a **location**
+- **`set!`** mutates the **environment** (Γ) binding of a **variable**
+
+This makes `set` more powerful for aliasing and sharing, but `set!` more convenient for local mutation.
+
+### Implementation Notes
+
+In our implementation, `set!` is implemented as a hybrid approach:
+1. Variables that need to be mutable are bound to locations in the environment
+2. `set!` looks up the variable, finds its location, and updates the store at that location
+3. This simulates mutable variables while keeping the environment structure immutable
+
+This approach gives us the convenience of `set!` syntax while maintaining the implementation simplicity of a mutable store.
+
+---
+
