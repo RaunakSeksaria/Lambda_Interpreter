@@ -88,16 +88,34 @@
         (error 'update-env-mut! "Unbound variable: ~a" var))))
 
 ;; ============================================================================
-;; Store Operations (MUTABLE)
+;;; Store Operations (MUTABLE)
 ;; ============================================================================
 
 ;; The global mutable store - a box containing an association list
 (define the-store (box '()))
 
+;; Variable-to-location table for implicit mutation via 'set'
+;; Maps (env-id . var-name) pairs to locations
+(define var-loc-table (box '()))
+
 ;; reset-store! : -> Void
 ;; Resets the store to empty (useful for fresh evaluation)
 (define (reset-store!)
-  (set-box! the-store '()))
+  (set-box! the-store '())
+  (set-box! var-loc-table '()))
+
+;; get-var-loc : Symbol Env -> Loc or #f
+;; Gets the implicit location for a variable, or #f if none exists
+(define (get-var-loc var env)
+  (let ([table (unbox var-loc-table)])
+    (let ([entry (assoc var table)])
+      (if entry (cdr entry) #f))))
+
+;; set-var-loc! : Symbol Loc -> Void
+;; Associates a variable with an implicit location
+(define (set-var-loc! var l)
+  (set-box! var-loc-table 
+            (cons (cons var l) (unbox var-loc-table))))
 
 ;; alloc-loc! : -> Loc
 ;; Allocates a fresh location by finding max address + 1
@@ -168,7 +186,14 @@
     
     ;; VAR: Γ(x) = v  =>  Γ; Σ ⊢ x ⇒ v ; Σ
     ;; Uses lookup-env-mut to auto-unbox mutable bindings (for letrec)
-    [(? symbol? x) (lookup-env-mut x env)]
+    ;; Also checks for implicit locations created by 'set'
+    [(? symbol? x)
+     (let ([val (lookup-env-mut x env)])
+       ;; If there's an implicit location for this variable, use that instead
+       (let ([implicit-loc (get-var-loc x env)])
+         (if implicit-loc
+             (lookup-store! implicit-loc)
+             val)))]
     
     ;; ABS: Γ; Σ ⊢ (λ x. e) ⇒ ⟨x, e, Γ⟩ ; Σ
     ;; Syntax: (lambda (x1 x2 ...) body)
@@ -229,14 +254,40 @@
     ;; SET: Update a location in the store (ORIGINAL DESIGN)
     ;; SET rule: Γ; Σ ⊢ e₁ ⇒ loc l ; Σ₁  Γ; Σ₁ ⊢ e₂ ⇒ v ; Σ₂  Σ₃=Σ₂[l↦v]
     ;;           => Γ; Σ ⊢ set e₁ e₂ ⇒ v ; Σ₃
+    ;; Extended to handle variable names: converts values to locations on-demand
     [`(set ,e1 ,e2)
-     (let ([l (eval-expr e1 env)]
-           [v (eval-expr e2 env)])
-       (match l
-         [(loc addr)
-          (update-store! l v)
-          v]  ; Return the assigned value
-         [_ (error 'set "First argument not a location: ~a" l)]))]
+     (let ([v (eval-expr e2 env)])
+       (cond
+         ;; If e1 is a symbol (variable name), handle implicit mutable binding
+         [(symbol? e1)
+          ;; Check if variable is already bound to a location
+          (let ([val (lookup-env-mut e1 env)])
+            (match val
+              [(loc addr)
+               ;; Already a location in the environment, just update it
+               (update-store! val v)
+               v]
+              [_
+               ;; Not a location - check if we've created an implicit location before
+               (let ([implicit-loc (get-var-loc e1 env)])
+                 (if implicit-loc
+                     ;; We've seen this variable before, update the implicit location
+                     (begin
+                       (update-store! implicit-loc v)
+                       v)
+                     ;; First time mutating this variable, create implicit location
+                     (let ([l (alloc-loc!)])
+                       (update-store! l v)
+                       (set-var-loc! e1 l)
+                       v)))]))]
+         ;; Otherwise, evaluate e1 to get a location
+         [else
+          (let ([l (eval-expr e1 env)])
+            (match l
+              [(loc addr)
+               (update-store! l v)
+               v]  ; Return the assigned value
+              [_ (error 'set "First argument not a location: ~a" l)]))]))]
     
     ;; SET!: Update variable binding in environment (NEW DESIGN - Section 8.2)
     ;; SET! rule: Γ; Σ ⊢ e ⇒ v ; Σ'  Γ' = Γ[x ↦ v]
@@ -278,6 +329,22 @@
     [`(seq ,e1 ,e2)
      (eval-expr e1 env)  ; Evaluate e1, discard result (but store is mutated)
      (eval-expr e2 env)] ; Return result of e2
+    
+    ;; WHILE: Looping construct
+    ;; WHILE-TRUE: Γ; Σ ⊢ e_cond ⇒ true; Σ₁  Γ; Σ₁ ⊢ e_body ⇒ v; Σ₂
+    ;;             Γ; Σ₂ ⊢ while e_cond e_body ⇒ v; Σ'
+    ;;             => Γ; Σ ⊢ while e_cond e_body ⇒ v; Σ'
+    ;; WHILE-FALSE: Γ; Σ ⊢ e_cond ⇒ false; Σ₁
+    ;;              => Γ; Σ ⊢ while e_cond e_body ⇒ ⊥; Σ₁
+    ;; Syntax: (while cond body)
+    [`(while ,cond-expr ,body-expr)
+     (let loop ()
+       (let ([cond-val (eval-expr cond-expr env)])
+         (if cond-val
+             (begin
+               (eval-expr body-expr env)
+               (loop))
+             'undefined)))]  ; Return undefined (⊥) when condition is false
     
     ;; LET*: Sequential bindings (LET1* rule, lines 125-126 of spec)
     ;; LET*: Γ; Σ ⊢ e₁ ⇒ v₁ ; Σ₁  Γ₁ = Γ[x₁ ↦ v₁]  Γ₁; Σ₁ ⊢ e₂ ⇒ v₂ ; Σ₂ ...
@@ -468,6 +535,7 @@
         (displayln "  deref:    (deref loc)          ; read from location")
         (displayln "  set:      (set loc val)        ; update location")
         (displayln "  seq:      (seq expr1 expr2)    ; sequencing")
+        (displayln "  while:    (while cond body)    ; loop while condition is true")
          (newline)
          (loop)]
         
@@ -495,6 +563,12 @@
          (displayln "  (let ([r (ref 10)])")
          (displayln "    (seq (set r (@ + (deref r) 5))")
          (displayln "         (deref r)))")
+         (newline)
+         (displayln "  ;; while loop - count from 0 to 4")
+         (displayln "  (let ([counter (ref 0)])")
+         (displayln "    (seq (while (@ < (deref counter) 5)")
+         (displayln "                (set counter (@ + (deref counter) 1)))")
+         (displayln "         (deref counter)))")
          (newline)
          (loop)]
         
@@ -763,6 +837,76 @@
                        (seq (@ inc)
                             (deref x)))))
              2)
+  
+  ;; ============================================================================
+  ;; While Loop Tests
+  ;; ============================================================================
+  
+  ;; Test 26: Basic while loop
+  (test-case "while loop basic"
+             '(let ([counter (ref 0)])
+                (seq (while (@ < (deref counter) 5)
+                            (set counter (@ + (deref counter) 1)))
+                     (deref counter)))
+             5)
+  
+  ;; Test 27: while loop with false condition (no iterations)
+  (test-case "while loop no iterations"
+             '(let ([x (ref 10)])
+                (seq (while (@ < (deref x) 5)
+                            (set x (@ + (deref x) 1)))
+                     (deref x)))
+             10)
+  
+  ;; Test 28: while loop with accumulation
+  (test-case "while loop accumulation"
+             '(let ([i (ref 0)])
+                (let ([sum (ref 0)])
+                  (seq (while (@ < (deref i) 10)
+                              (seq (set sum (@ + (deref sum) (deref i)))
+                                   (set i (@ + (deref i) 1))))
+                       (deref sum))))
+             45)
+  
+  ;; Test 29: Nested while loops
+  (test-case "nested while loops"
+             '(let ([i (ref 0)])
+                (let ([j (ref 0)])
+                  (let ([count (ref 0)])
+                    (seq (while (@ < (deref i) 3)
+                                (seq (set j 0)
+                                     (seq (while (@ < (deref j) 3)
+                                                 (seq (set count (@ + (deref count) 1))
+                                                      (set j (@ + (deref j) 1))))
+                                          (set i (@ + (deref i) 1)))))
+                         (deref count)))))
+             9)
+  
+  ;; Test 30: while with complex condition
+  (test-case "while complex condition"
+             '(let ([x (ref 1)])
+                (seq (while (@ < (deref x) 100)
+                            (set x (@ * (deref x) 2)))
+                     (deref x)))
+             128)
+  
+  ;; Test 31: While loop (counter)
+  (test-case "while loop (counter)"
+             '(let ([pos (ref 0)])
+                (seq (while (@ < (deref pos) 3)
+                            (set pos (@ + (deref pos) 1)))
+                     (deref pos)))
+             3)
+  
+  ;; Test 32: While loop factorial (imperative style)
+  (test-case "while loop factorial (imperative style)"
+             '(let ([n 5])
+                (let ([res (ref 1)])
+                  (seq (while (@ > n 0)
+                              (seq (set res (@ * (deref res) n))
+                                   (set n (@ - n 1))))
+                       (deref res))))
+             120)
   
   (newline)
   (displayln "╔════════════════════════════════════════════╗")
