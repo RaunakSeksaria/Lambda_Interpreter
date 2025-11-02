@@ -428,6 +428,36 @@
        ; When functions look up each other, they get the actual closures
        (eval-expr body gamma-r))]
     
+    ;;; ;; LETREC(Older): Mutual recursion using STORE-BASED strategy
+    ;;; ;; We use the mutable store to break the recursive cycle:
+    ;;; ;; 1. Allocate locations for each function
+    ;;; ;; 2. Bind names to those locations in environment
+    ;;; ;; 3. Evaluate expressions (closures can now find locations)
+    ;;; ;; 4. Store actual values at those locations
+    ;;; ;; 5. Evaluate body
+    ;;; ;; Syntax: (letrec ([f1 e1] [f2 e2] ...) body)
+    ;;; [`(letrec (,bindings ...) ,body)
+    ;;;  (let* ([vars (map car bindings)]
+    ;;;         [exprs (map cadr bindings)]
+    ;;;         ; Step 1: Allocate a location for each function
+    ;;;         [locs (map (lambda (_) (alloc-loc!)) vars)]
+    ;;;         ; Step 2: Bind each name to its location
+    ;;;         [rec-env (foldl (lambda (var loc env)
+    ;;;                           (extend-env var loc env))
+    ;;;                         env
+    ;;;                         vars
+    ;;;                         locs)]
+    ;;;         ; Step 3: Evaluate expressions in recursive environment
+    ;;;         ;         (they capture rec-env which has locations)
+    ;;;         [vals (map (lambda (expr) (eval-expr expr rec-env)) exprs)])
+    ;;;    ; Step 4: Store actual values at their locations
+    ;;;    ; NOTE: Reverse vals to match the order foldl creates bindings
+    ;;;    (for-each (lambda (loc val) (update-store! loc val)) locs (reverse vals))
+    ;;;    ; Step 5: Evaluate body - functions will deref their locations
+    ;;;    (eval-expr body rec-env))]
+
+
+
     ;; The following commented lines were a convenience feature which wasnt given in the assignment
     ;; what it did was it allowed (+ 1 2) instead of (@ + 1 2) as well
     ;; Default: list form application (alternative syntax)
