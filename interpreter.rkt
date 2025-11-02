@@ -50,6 +50,43 @@
     [else
      (cons (car env) (update-env var val (cdr env)))]))
 
+;; extend-env-mut : Symbol (Boxof Value) Env -> Env
+;; Extends environment with a mutable binding (boxed value)
+;; This allows the binding to be updated in place
+(define (extend-env-mut var boxed-val env)
+  (cons (cons var boxed-val) env))
+
+;; extend-env-mut* : (Listof Symbol) (Listof (Boxof Value)) Env -> Env
+;; Extends environment with multiple mutable bindings
+(define (extend-env-mut* vars boxed-vals env)
+  (if (= (length vars) (length boxed-vals))
+      (append (map cons vars boxed-vals) env)
+      (error 'extend-env-mut* "Argument count mismatch: ~a vars, ~a vals" 
+             (length vars) (length boxed-vals))))
+
+;; lookup-env-mut : Symbol Env -> Value
+;; Looks up a variable and automatically unboxes if it's a mutable binding
+(define (lookup-env-mut var env)
+  (let ([binding (assoc var env)])
+    (if binding
+        (let ([val (cdr binding)])
+          ; If it's a box, unbox it; otherwise return as-is
+          (if (box? val)
+              (unbox val)
+              val))
+        (error 'lookup-env-mut "Unbound variable: ~a" var))))
+
+;; update-env-mut! : Symbol Value Env -> Void
+;; Mutates a boxed binding in place (for letrec environment updates)
+(define (update-env-mut! var val env)
+  (let ([binding (assoc var env)])
+    (if binding
+        (let ([boxed-val (cdr binding)])
+          (if (box? boxed-val)
+              (set-box! boxed-val val)
+              (error 'update-env-mut! "Variable ~a is not mutable" var)))
+        (error 'update-env-mut! "Unbound variable: ~a" var))))
+
 ;; ============================================================================
 ;; Store Operations (MUTABLE)
 ;; ============================================================================
@@ -64,11 +101,14 @@
 
 ;; alloc-loc! : -> Loc
 ;; Allocates a fresh location by finding max address + 1
-;; Mutates the store directly
+;; Mutates the store directly by adding a placeholder
 (define (alloc-loc!)
   (let* ([store (unbox the-store)]
-         [next-addr (+ 1 (foldl max -1 (map car store)))])
-    (loc next-addr)))
+         [next-addr (+ 1 (foldl max -1 (map car store)))]
+         [new-loc (loc next-addr)])
+    ; Add a placeholder to the store so next allocation gets a different address
+    (set-box! the-store (cons (cons next-addr 'uninitialized) store))
+    new-loc))
 
 ;; lookup-store! : Loc -> Value
 ;; Retrieves the value at a location in the store
@@ -127,7 +167,8 @@
     [(? number? n) n]
     
     ;; VAR: Γ(x) = v  =>  Γ; Σ ⊢ x ⇒ v ; Σ
-    [(? symbol? x) (lookup-env x env)]
+    ;; Uses lookup-env-mut to auto-unbox mutable bindings (for letrec)
+    [(? symbol? x) (lookup-env-mut x env)]
     
     ;; ABS: Γ; Σ ⊢ (λ x. e) ⇒ ⟨x, e, Γ⟩ ; Σ
     ;; Syntax: (lambda (x1 x2 ...) body)
@@ -160,7 +201,7 @@
     [`(@ ,e0 ,args ...)
      (let ([func-val (eval-expr e0 env)]
            [arg-vals (map (lambda (arg) (eval-expr arg env)) args)])
-       ; Auto-dereference function if it's a location (for letrec support)
+       ; Auto-dereference function if it's a location (for ref/deref support)
        (let ([func (match func-val
                      [(loc addr) (lookup-store! func-val)]
                      [_ func-val])])
@@ -209,7 +250,7 @@
        ; For simplicity with mutable store, we'll allocate a location
        ; and update the environment's binding to point to that location
        ; This simulates mutable variable bindings
-       (let ([current-val (lookup-env var env)])
+       (let ([current-val (lookup-env-mut var env)])
          (match current-val
            [(loc addr)
             ; Variable already bound to a location, update it
@@ -271,33 +312,54 @@
                               vals)])
        (eval-expr body final-env))]
     
-    ;; LETREC: Mutual recursion using STORE-BASED strategy
-    ;; We use the mutable store to break the recursive cycle:
-    ;; 1. Allocate locations for each function
-    ;; 2. Bind names to those locations in environment
-    ;; 3. Evaluate expressions (closures can now find locations)
-    ;; 4. Store actual values at those locations
-    ;; 5. Evaluate body
+    ;; LETREC: Mutual recursion using MUTABLE ENVIRONMENT BINDINGS
+    ;; Implements the formal rule PRECISELY:
+    ;; Γr = Γ[∀i | fi ↦ ⟨fi; ei, ⊥⟩]  (bind names to placeholder closures)
+    ;; Γr; Σ ⊢ ei ⇒ vi; Σi             (evaluate expressions in recursive env)
+    ;; Γr' = Γr[fi ↦ vi]              (UPDATE environment with actual values)
+    ;; Γr'; Σk ⊢ body ⇒ v; Σ'         (evaluate body in final environment)
+    ;;
+    ;; Strategy using mutable environment bindings:
+    ;; 1. Create placeholder closures ⟨fi; ei, ⊥⟩ where ⊥ is an empty environment
+    ;; 2. Create Γr by binding each fi to a BOXED placeholder (mutable binding)
+    ;; 3. Evaluate each ei in Γr to get actual closures (they capture Γr)
+    ;; 4. UPDATE Γr in place by mutating the boxes: Γr' = Γr[fi ↦ vi]
+    ;; 5. Evaluate body in Γr (which is now Γr' due to mutation)
+    ;;
+    ;; This follows the formal semantics exactly:
+    ;; - Environments are extended (not mutated structurally)
+    ;; - The "update" Γr[fi ↦ vi] is achieved via boxing (value mutation)
+    ;; - No store indirection needed - recursion works through environment
     ;; Syntax: (letrec ([f1 e1] [f2 e2] ...) body)
     [`(letrec (,bindings ...) ,body)
      (let* ([vars (map car bindings)]
             [exprs (map cadr bindings)]
-            ; Step 1: Allocate a location for each function
-            [locs (map (lambda (_) (alloc-loc!)) vars)]
-            ; Step 2: Bind each name to its location
-            [rec-env (foldl (lambda (var loc env)
-                              (extend-env var loc env))
-                            env
-                            vars
-                            locs)]
-            ; Step 3: Evaluate expressions in recursive environment
-            ;         (they capture rec-env which has locations)
-            [vals (map (lambda (expr) (eval-expr expr rec-env)) exprs)])
-       ; Step 4: Store actual values at their locations
-       ; NOTE: Reverse vals to match the order foldl creates bindings
-       (for-each (lambda (loc val) (update-store! loc val)) locs (reverse vals))
-       ; Step 5: Evaluate body - functions will deref their locations
-       (eval-expr body rec-env))]
+            ; Step 1: Create placeholder closures ⟨fi; ei, ⊥⟩
+            ; Extract params and body from lambda expressions
+            [placeholders (map (lambda (expr)
+                                (match expr
+                                  [`(lambda (,params ...) ,body-expr)
+                                   ; Placeholder with empty environment (⊥)
+                                   (closure params body-expr '())]
+                                  [_ 
+                                   ; For non-lambda: use a dummy value
+                                   'placeholder]))
+                              exprs)]
+            ; Step 2: Create Γr with BOXED placeholders (mutable bindings)
+            ; Each box will be mutated later to hold the actual closure
+            [boxed-placeholders (map (lambda (p) (box p)) placeholders)]
+            [gamma-r (extend-env-mut* vars boxed-placeholders env)]
+            ; Step 3: Evaluate each ei in Γr to get actual closures
+            ; These closures capture gamma-r, which contains boxed bindings
+            [actual-vals (map (lambda (expr) (eval-expr expr gamma-r)) exprs)])
+       ; Step 4: Update Γr to Γr' by mutating the boxes
+       ; This implements Γr[fi ↦ vi] from the formal rule
+       (for-each (lambda (var val) (update-env-mut! var val gamma-r))
+                 vars
+                 actual-vals)
+       ; Step 5: Evaluate body in Γr (which is now Γr' due to mutations)
+       ; When functions look up each other, they get the actual closures
+       (eval-expr body gamma-r))]
     
     ;; The following commented lines were a convenience feature which wasnt given in the assignment
     ;; what it did was it allowed (+ 1 2) instead of (@ + 1 2) as well
