@@ -746,3 +746,187 @@ eval (if (@ == n 0) 1 (@ * n (@ fact (@ - n 1)))) in Γ'
 
 ---
 
+## Bonus: Interactive REPL
+
+### Overview
+
+In addition to the core interpreter functionality, we implemented a comprehensive **Read-Eval-Print Loop (REPL)** that provides an interactive environment for exploring λ-calculus expressions. This feature significantly enhances the usability and educational value of the interpreter.
+
+### Features
+
+#### 1. Interactive Shell
+The REPL provides a command-line interface with a prompt that accepts λ-calculus expressions and commands:
+
+```
+λ-calc>
+```
+
+Users can directly type expressions and see immediate results without needing to modify source code.
+
+#### 2. Built-in Help System
+The REPL includes comprehensive help documentation accessible via the `help` command:
+
+- **Syntax Reference**: Complete overview of all language constructs
+- **Core Features**: Lambda, application, let, if expressions
+- **Assignment 4 Features**: let*, letrec, ref/deref/set, seq, while
+- **Command List**: All available REPL commands
+
+**Example:**
+```
+λ-calc> help
+```
+
+Shows formatted documentation with syntax and explanations for each feature.
+
+#### 3. Example Gallery
+The `examples` command displays curated example expressions demonstrating key features:
+
+- **Core Examples**: Basic function application, closures, currying
+- **Sequential Bindings**: let* usage
+- **Mutual Recursion**: letrec factorial and even/odd examples
+- **Mutable Store**: ref/deref/set operations
+- **Loops**: while loop examples
+
+**Example:**
+```
+λ-calc> examples
+```
+
+Displays ready-to-run example expressions with explanations.
+
+#### 4. Integrated Test Suite
+The `run-tests` command executes a comprehensive test suite (32 tests) covering:
+
+- Core λ-calculus features (closures, currying, scoping)
+- Assignment 4 features (let*, letrec, store operations, while loops)
+- Alternative semantics (let*2, set!)
+- Edge cases and complex interactions
+
+**Output Format:**
+```
+Test 1: Numeric literal ... ✓ PASSED (=> 42)
+Test 2: Simple function ... ✓ PASSED (=> 6)
+...
+╔════════════════════════════════════════════╗
+║  Results: 31/32 tests passed               ║
+║  Status: ✗ 1 test(s) failed                ║
+╚════════════════════════════════════════════╝
+```
+
+#### 5. Pretty Printing
+Results are formatted for readability:
+
+- **Closures**: `<closure: params=(x y)>`
+- **Primitives**: `<primitive: +>`
+- **Locations**: `<loc:0>`
+- **Regular Values**: Direct display (numbers, booleans)
+
+#### 6. Error Handling
+Robust error handling with informative messages:
+
+```racket
+λ-calc> (@ + 1 "hello")
+ERROR: Type error in primitive +
+```
+
+The REPL catches exceptions and displays them without crashing, allowing continued interaction.
+
+#### 7. Store Reset
+Each top-level evaluation automatically resets the store, ensuring:
+
+- Clean state between expressions
+- No interference from previous computations
+- Predictable behavior
+
+### Implementation Details
+
+#### REPL Loop Structure
+```racket
+(define (repl)
+  (let loop ()
+    (display "λ-calc> ")
+    (flush-output)
+    (let ([input (read)])
+      (match input
+        ['quit (displayln "Goodbye!")]
+        ['help (show-help) (loop)]
+        ['examples (show-examples) (loop)]
+        ['run-tests (run-tests) (loop)]
+        [expr
+         (with-handlers ([exn:fail? (lambda (e) ...)])
+           (displayln (pretty-print-value (eval expr))))
+         (loop)]))))
+```
+
+Key design choices:
+1. **Tail recursion**: Uses `let loop` for efficient looping
+2. **Pattern matching**: Clean command dispatching via `match`
+3. **Exception handling**: `with-handlers` catches and displays errors gracefully
+4. **Flush output**: Ensures prompt appears before input
+
+#### Pretty Printer
+```racket
+(define (pretty-print-value v)
+  (match v
+    [(closure params body env)
+     (format "<closure: params=~a>" params)]
+    [(primitive name _)
+     (format "<primitive: ~a>" name)]
+    [(loc addr)
+     (format "<loc:~a>" addr)]
+    [_ (format "~a" v)]))
+```
+
+Abstracts internal representations to user-friendly formats.
+
+### Educational Benefits
+
+1. **Immediate Feedback**: Students can experiment and see results instantly
+2. **Exploration**: Easy to try variations and test hypotheses
+3. **Debugging**: Test individual components before building complex expressions
+4. **Learning Curve**: Help and examples reduce barrier to entry
+
+### User Experience
+
+The REPL creates a polished, professional experience:
+
+- **Visual Design**: Box-drawing characters for headers and tables
+- **Clear Prompts**: λ-calculus symbol (`λ-calc>`) reinforces context
+- **Consistent Formatting**: All output follows uniform style
+- **Navigation**: Simple command structure (single keywords)
+
+### Example Session
+
+```
+λ-calc> (@ + 1 2)
+3
+
+λ-calc> (let ([x 5]) (@ * x x))
+25
+
+λ-calc> (letrec ([fact (lambda (n)
+                         (if (@ == n 0) 1
+                             (@ * n (@ fact (@ - n 1)))))])
+          (@ fact 5))
+120
+
+λ-calc> run-tests
+[Test suite output...]
+
+λ-calc> quit
+Goodbye!
+```
+
+### Conclusion
+
+The REPL transforms the interpreter from a library into a complete interactive programming environment. It demonstrates professional software engineering practices:
+
+- **User-centered design**: Prioritizes ease of use
+- **Documentation**: Built-in help reduces external dependencies
+- **Testing**: Integrated test suite ensures correctness
+- **Polish**: Attention to visual details creates professional feel
+
+This bonus feature significantly enhances the project's utility for both learning and demonstration purposes.
+
+---
+
