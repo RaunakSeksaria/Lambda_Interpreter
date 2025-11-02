@@ -64,28 +64,7 @@ This interpreter extends a basic λ-calculus with:
 4. Mutate boxes in place: `update-env-mut!`
 5. Variable lookup auto-unboxes values
 
-### 3. While Loop Construct
-
-**Choice:** Direct implementation following formal semantics
-
-**Rationale:**
-- Follows WHILE-TRUE and WHILE-FALSE rules exactly
-- WHILE-TRUE: Evaluates body, then recursively re-evaluates while
-- WHILE-FALSE: Returns `'undefined` when condition is false
-
-**Implementation:**
-```racket
-[`(while ,cond-expr ,body-expr)
- (let loop ()
-   (let ([cond-val (eval-expr cond-expr env)])
-     (if cond-val
-         (begin
-           (eval-expr body-expr env)
-           (loop))
-         'undefined)))]
-```
-
-### 4. Implicit Mutable Variables for set
+### 3. Implicit Mutable Variables for set
 
 **Choice:** Allow `set` to work on regular variable bindings via implicit location table
 
