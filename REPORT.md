@@ -48,48 +48,57 @@ This interpreter extends a basic λ-calculus with:
   (set-box! the-store (cons (cons (loc-addr l) v) (unbox the-store))))
 ```
 
-### 2. Store-Based letrec
+### 2. Environment-Based letrec with Mutable Bindings
 
-**Choice:** Use store locations instead of environment-based recursion
+**Choice:** Use boxed environment bindings instead of store locations
 
 **Rationale:**
-- Breaks circular dependencies naturally
-- Functions are stored at locations
-- Auto-dereference in function position enables transparent recursion
+- Follows formal semantics: Γr[fi ↦ vi] update rule
+- Environment structure remains immutable, only values are mutable
+- Uses Racket's `box` for in-place mutation
 
 **Implementation Strategy:**
-1. Allocate a location for each recursive binding
-2. Bind variable names to these locations in the environment
-3. Evaluate function bodies (they capture environment with locations)
-4. Store actual closures at their locations
-5. When functions are called, locations auto-dereference to closures
+1. Create placeholder closures with boxed bindings
+2. Extend environment with boxed values: `extend-env-mut*`
+3. Evaluate function bodies in extended environment
+4. Mutate boxes in place: `update-env-mut!`
+5. Variable lookup auto-unboxes values
 
-### 3. Selective Auto-Dereference
+### 3. While Loop Construct
 
-**Choice:** Only auto-dereference locations in function application position
+**Choice:** Direct implementation following formal semantics
 
 **Rationale:**
-- Allows `ref` to work (variables can hold locations)
-- Enables `letrec` (functions stored as locations are called transparently)
-- Best of both worlds
+- Follows WHILE-TRUE and WHILE-FALSE rules exactly
+- WHILE-TRUE: Evaluates body, then recursively re-evaluates while
+- WHILE-FALSE: Returns `'undefined` when condition is false
 
+**Implementation:**
 ```racket
-;; In APP case:
-(let ([func-val (eval-expr e0 env)])
-  (let ([func (match func-val
-                [(loc addr) (lookup-store! func-val)]  ; Deref if location
-                [_ func-val])])
-    (apply-func func arg-vals)))
+[`(while ,cond-expr ,body-expr)
+ (let loop ()
+   (let ([cond-val (eval-expr cond-expr env)])
+     (if cond-val
+         (begin
+           (eval-expr body-expr env)
+           (loop))
+         'undefined)))]
 ```
 
-### 4. set Returns Value
+### 4. Implicit Mutable Variables for set
 
-**Choice:** `set` returns the assigned value
+**Choice:** Allow `set` to work on regular variable bindings via implicit location table
 
 **Rationale:**
-- Matches assignment semantics in most languages
-- Enables chaining: `(seq (set r 5) (deref r))`
-- Per specification line 120: SET returns `v`
+- Enables imperative-style code: `(let ([n 5]) (set n 10))`
+- Variables automatically become mutable when first mutated
+- Maintains compatibility with location-based `set`
+
+**Implementation:**
+- Global `var-loc-table` maps variables to implicit locations
+- First `set` on a variable creates and registers a location
+- Variable lookup checks implicit location table
+- Transparently converts immutable bindings to mutable on-demand
 
 ---
 
@@ -212,7 +221,187 @@ We implemented **two versions** of `let*`:
 
 ---
 
-### 8.3: Minimalism Discussion
+### 8.3: While Loop Variants and Experiments
+
+#### While as Syntactic Sugar
+
+**Encoding using `letrec`:**
+```racket
+(while e_cond e_body)
+≡
+(letrec ([loop (lambda (_)
+                 (if e_cond
+                     (seq e_body (@ loop 'unit))
+                     'undefined))])
+  (@ loop 'unit))
+```
+
+**Trade-offs:**
+
+**Sugar approach (encoding):**
+- ✓ Keeps core language smaller
+- ✓ No new evaluation rules needed
+- ✗ More overhead (function call per iteration)
+- ✗ Less efficient at runtime
+- ✗ Cannot add control flow primitives (break/continue)
+
+**Primitive approach (our implementation):**
+- ✓ More efficient (direct recursion in evaluator)
+- ✓ Enables language-level control flow extensions
+- ✓ Better error messages and debugging
+- ✓ Can optimize short-circuit evaluation
+- ✗ Increases language complexity
+
+**Conclusion:** We chose primitive implementation for efficiency and extensibility.
+
+---
+
+#### Do-While Variant
+
+**Semantics:** Executes body at least once, then checks condition.
+
+**Formal Rules:**
+
+```
+DO-WHILE:
+Γ; Σ ⊢ e_body ⇒ v₁ ; Σ₁
+Γ; Σ₁ ⊢ e_cond ⇒ v_cond ; Σ₂
+(v_cond = true  ⟹  Γ; Σ₂ ⊢ do-while e_cond e_body ⇒ v₂ ; Σ₃)
+(v_cond = false ⟹  Σ₃ = Σ₂, v₂ = ⊥)
+────────────────────────────────────────────────────────
+Γ; Σ ⊢ do-while e_cond e_body ⇒ v₂ ; Σ₃
+```
+
+**Key Difference from While:**
+- Body always executes once before condition check
+- Useful for input validation loops, menu systems
+
+**Example:**
+```racket
+; While: may not execute
+(while (@ < n 0) (set n (@ + n 1)))  ; No-op if n ≥ 0
+
+; Do-while: executes at least once
+(do-while (@ < n 0) (set n (@ + n 1)))  ; Always increments once
+```
+
+---
+
+#### Break and Continue
+
+**Break:** Exit loop early, returning control to after the loop.
+
+**Continue:** Skip to next iteration, re-evaluating condition.
+
+**Semantic Challenges:**
+
+1. **Non-local control flow:** Requires exception-like mechanism or special return values
+2. **Value vs Unit:** Should break return the last computed value or unit?
+3. **Store consistency:** Must ensure store updates propagate correctly
+
+**Modified Rules with Break:**
+
+```
+WHILE-BREAK:
+Γ; Σ ⊢ e_cond ⇒ true ; Σ₁
+Γ; Σ₁ ⊢ e_body ⇒ (break v) ; Σ₂
+────────────────────────────────────────────
+Γ; Σ ⊢ while e_cond e_body ⇒ v ; Σ₂
+
+BREAK:
+Γ; Σ ⊢ e ⇒ v ; Σ'
+────────────────────────────────────────────
+Γ; Σ ⊢ break e ⇒ (break v) ; Σ'
+```
+
+**Modified Rules with Continue:**
+
+```
+WHILE-CONTINUE:
+Γ; Σ ⊢ e_cond ⇒ true ; Σ₁
+Γ; Σ₁ ⊢ e_body ⇒ (continue) ; Σ₂
+Γ; Σ₂ ⊢ while e_cond e_body ⇒ v ; Σ₃
+────────────────────────────────────────────
+Γ; Σ ⊢ while e_cond e_body ⇒ v ; Σ₃
+
+CONTINUE:
+────────────────────────────────────────────
+Γ; Σ ⊢ continue ⇒ (continue) ; Σ
+```
+
+**Implementation Approach:**
+- Return special tagged values: `(break v)` or `(continue)`
+- Propagate through `seq` but catch at loop boundary
+- Affects all evaluation rules that might contain loops
+
+**Design Decision:**
+- `break` returns a value (useful for search loops)
+- `continue` returns unit (just skips iteration)
+
+---
+
+#### For-Loop as Syntactic Sugar
+
+**Syntax:** `(for init cond step body)`
+
+**Desugaring:**
+```racket
+(for e_init e_cond e_step e_body)
+≡
+(seq e_init
+     (while e_cond
+            (seq e_body e_step)))
+```
+
+**Example:**
+```racket
+; For-loop:
+(for (let ([i (ref 0)])
+     (@ < (deref i) 10)
+     (set i (@ + (deref i) 1))
+     (display (deref i)))
+
+; Desugars to:
+(seq (let ([i (ref 0)]))
+     (while (@ < (deref i) 10)
+            (seq (display (deref i))
+                 (set i (@ + (deref i) 1)))))
+```
+
+**Scoping Issues:**
+
+**Problem:** Loop variable `i` declared in `init` should be visible in `cond`, `step`, and `body`.
+
+**Solution 1: Simple desugaring (doesn't work):**
+```racket
+; i not in scope for cond/step/body!
+(seq (let ([i (ref 0)]))
+     (while ...))
+```
+
+**Solution 2: Wrap everything in let scope:**
+```racket
+(for ([i (ref 0)]) e_cond e_step e_body)
+≡
+(let ([i (ref 0)])
+  (while e_cond
+         (seq e_body e_step)))
+```
+
+**Solution 3: Use let* for complex initialization:**
+```racket
+(for ([i (ref 0)] [j (ref 10)]) ...)
+≡
+(let* ([i (ref 0)] [j (ref 10)])
+  (while e_cond
+         (seq e_body e_step)))
+```
+
+**Key Insight:** For-loops need special scoping rules where the initialization creates a scope that wraps the entire loop. This is why many languages treat `for` as a primitive construct rather than sugar.
+
+---
+
+### 8.4: Minimalism Discussion
 
 Can we encode the new constructs using simpler primitives?
 
