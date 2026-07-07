@@ -458,7 +458,7 @@
 
 
 
-    ;; The following commented lines were a convenience feature which wasnt given in the assignment
+    ;; The following commented lines were a convenience feature beyond the core spec
     ;; what it did was it allowed (+ 1 2) instead of (@ + 1 2) as well
     ;; Default: list form application (alternative syntax)
     ;;[`(,e0 ,args ...)
@@ -528,8 +528,7 @@
 ;; Interactive interpreter REPL
 (define (repl)
   (displayln "╔════════════════════════════════════════════╗")
-  (displayln "║   λ-Calculus Interpreter (Assignment 4)   ║")
-  (displayln "║   Author: Raunak Seksaria (2023113019)    ║")
+  (displayln "║           λ-Calculus Interpreter           ║")
   (displayln "╚════════════════════════════════════════════╝")
   (displayln "\nCommands: 'help', 'examples', 'run-tests', 'quit'")
   (newline)
@@ -557,7 +556,7 @@
          (displayln "  Let:      (let ([x val]) body)")
          (displayln "  If:       (if cond then else)")
          (newline)
-        (displayln "Assignment 4 Features:")
+        (displayln "Extended Features:")
         (displayln "  let*:     (let* ([x1 e1] [x2 e2] ...) body)   ; sequential bindings")
         (displayln "  let*2:    (let*2 ([x1 e1] [x2 e2] ...) body)  ; alternative let* (no dependencies)")
         (displayln "  letrec:   (letrec ([f1 e1] [f2 e2] ...) body) ; mutual recursion")
@@ -576,7 +575,7 @@
          (displayln "  (let ([x 10]) (@ + x 5))")
          (displayln "  (@ (@ (lambda (x) (lambda (y) (@ + x y))) 3) 4)")
          (newline)
-        (displayln "Assignment 4 Examples:")
+        (displayln "Extended Examples:")
         (displayln "  ;; let* - sequential bindings (y can see x)")
         (displayln "  (let* ([x 1] [y (@ + x 1)]) y)  ; => 2")
         (newline)
@@ -730,7 +729,7 @@
                 (@ (@ fact fact) 5))
              120)
   
-  ;; Report example from assignment
+  ;; Higher-order function example (also used by the main module demo)
   (test-case "Report example"
              '(let ([f (lambda (x) (lambda (y) (@ + x y)))])
                 (let ([g (lambda (z) (@ f z 10))])
@@ -738,7 +737,7 @@
              15)
   
   ;; ============================================================================
-  ;; Assignment 4 Tests (from Appendix A)
+  ;; Extended language tests
   ;; ============================================================================
   
   ;; Test 11: let* sequential binding
