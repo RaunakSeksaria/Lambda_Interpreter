@@ -1,0 +1,52 @@
+# Differential-test corpus for the expression engine.
+#
+# Format, one case per line:   <inputs> <expr>
+#   <inputs> is `-` for none, else comma-separated name=value (int or #t/#f).
+#   <expr>   is the rest of the line, in the same S-expr syntax the Racket
+#            interpreter (../interpreter.rkt) accepts.
+# Blank lines and lines starting with `#` are ignored.
+#
+# The Racket oracle (gen_golden.rkt) evaluates each case wrapped in a `let*`
+# that binds the inputs, and the C++ engine (difftest) evaluates the same case
+# with those inputs. Every result must match.
+
+# --- primitives ---
+- (@ + 1 2)
+- (@ - 10 3)
+- (@ * 6 7)
+- (@ / 17 5)
+- (@ / -17 5)
+- (@ == 4 4)
+- (@ == 4 5)
+- (@ < 3 4)
+- (@ > 3 4)
+- (@ <= 4 4)
+- (@ >= 3 4)
+- (@ not (@ > 3 4))
+- (@ and (@ > 5 0) (@ < 5 10))
+- (@ and (@ > 5 0) (@ < 5 3))
+- (@ or #f #t)
+- (@ or #f #f)
+
+# --- inputs (market fields) ---
+x=5 (@ + x x)
+x=5 (if (@ > x 0) 1 -1)
+x=-3 (if (@ > x 0) 1 -1)
+bid=100,ask=101 (if (@ < bid ask) (@ - ask bid) 0)
+px=50,lo=10,hi=100 (@ and (@ >= px lo) (@ <= px hi))
+px=150,lo=10,hi=100 (@ and (@ >= px lo) (@ <= px hi))
+
+# --- let / let* ---
+- (let ([x 10]) (@ + x 5))
+- (let* ([x 1] [y (@ + x 1)] [z (@ + y 1)]) z)
+bid=100,ask=104 (let* ([spread (@ - ask bid)] [mid (@ / (@ + ask bid) 2)]) (if (@ > spread 2) mid 0))
+
+# --- store: ref / deref / set / seq / while ---
+- (deref (ref 42))
+- (let ([r (ref 10)]) (seq (set r (@ + (deref r) 5)) (deref r)))
+- (let ([c (ref 0)]) (seq (while (@ < (deref c) 5) (set c (@ + (deref c) 1))) (deref c)))
+n=6 (let* ([i (ref 1)] [acc (ref 1)]) (seq (while (@ <= (deref i) n) (seq (set acc (@ * (deref acc) (deref i))) (set i (@ + (deref i) 1)))) (deref acc)))
+n=0 (let ([c (ref 0)]) (seq (while (@ < (deref c) n) (set c (@ + (deref c) 1))) (deref c)))
+
+# --- a compound "signal": weighted mid vs threshold ---
+bid=100,ask=102,qty=8 (let* ([mid (@ / (@ + bid ask) 2)] [skew (@ * qty 1)]) (if (@ > skew 5) (@ + mid 1) mid))
