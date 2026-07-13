@@ -15,10 +15,13 @@ namespace engine {
 enum class Tok : std::uint8_t { LParen, RParen, Int, Bool, Symbol, End };
 
 struct Token {
-  Tok kind;
+  Tok kind = Tok::End;
   std::int64_t int_val = 0;   // Int
   bool bool_val = false;      // Bool
   std::string text;           // Symbol
+
+  Token() = default;
+  Token(Tok k) : kind(k) {}   // implicit: `{Tok::LParen}` etc. stay concise
 };
 
 // Tokenize `src`. Throws std::runtime_error on an illegal character.
