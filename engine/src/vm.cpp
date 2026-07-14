@@ -3,6 +3,13 @@
 #include <cstddef>
 #include <cstdint>
 
+// Computed-goto dispatch uses GNU extensions (label addresses `&&L` and
+// `goto *table[]`). They are intentional, so silence -Wpedantic for this build
+// only; the switch build stays fully pedantic.
+#ifdef ENGINE_COMPUTED_GOTO
+#pragma GCC diagnostic ignored "-Wpedantic"
+#endif
+
 // Dispatch macros. VM_CASE opens a handler, VM_NEXT advances to the next
 // instruction, VM_DISPATCH re-dispatches after a jump has set `ip`. The same
 // handler bodies are shared by both the switch and the computed-goto builds.

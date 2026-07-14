@@ -12,18 +12,31 @@
 CXX      ?= g++
 CXXSTD   ?= -std=c++20
 OPT      ?= -O3 -march=native -DNDEBUG
-WARN     ?= -Wall -Wextra
+# -Wnull-dereference is intentionally omitted: it is optimization-level
+# dependent and false-positives inside libstdc++ headers at -O1 (the sanitize
+# build). Real null derefs are caught by the ASan/UBSan `sanitize` target.
+WARN     ?= -Wall -Wextra -Wpedantic -Wshadow -Wconversion -Wsign-conversion \
+            -Wold-style-cast -Wcast-qual -Wdouble-promotion
 INCLUDES := -Iinclude -Isrc
+
+# Warnings are errors by default (STRICT=1). Override with `make STRICT=0`.
+STRICT   ?= 1
+ifeq ($(STRICT),1)
+WARN     += -Werror
+endif
+
 CXXFLAGS := $(CXXSTD) $(OPT) $(WARN) $(INCLUDES)
 
 BUILD := build
 
 # Frontend TUs shared by every binary (parse + compile).
-FRONT_SRcs := src/lexer.cpp src/parser.cpp src/compiler.cpp
+FRONT_SRCS := src/lexer.cpp src/parser.cpp src/compiler.cpp
 FRONT_OBJS := $(BUILD)/lexer.o $(BUILD)/parser.o $(BUILD)/compiler.o
 
-.PHONY: all test bench clean
-all: $(BUILD)/lambda_eval $(BUILD)/difftest $(BUILD)/bench_switch $(BUILD)/bench_goto
+.PHONY: all test bench sanitize valgrind lint format clean
+# Default build: the usable binaries + the differential-test driver. Benchmarks
+# are built on demand via `make bench` (perf-sensitive; not part of CI).
+all: $(BUILD)/lambda_eval $(BUILD)/difftest
 
 $(BUILD):
 	mkdir -p $(BUILD)
@@ -58,6 +71,43 @@ test: $(BUILD)/difftest
 bench: $(BUILD)/bench_switch $(BUILD)/bench_goto
 	@echo "== switch dispatch =="; $(BUILD)/bench_switch
 	@echo "== computed-goto dispatch =="; $(BUILD)/bench_goto
+
+# --- quality gates ---
+
+# Address + UndefinedBehavior sanitizers over the differential test. On a box
+# whose UBSan runtime is missing, run `make sanitize SANITIZERS=address`.
+SANITIZERS ?= address,undefined
+sanitize: | $(BUILD)
+	$(CXX) $(CXXSTD) -O1 -g -fsanitize=$(SANITIZERS) -fno-omit-frame-pointer \
+	    $(WARN) $(INCLUDES) tests/difftest.cpp $(FRONT_SRCS) src/vm.cpp \
+	    -o $(BUILD)/difftest_san
+	racket tests/gen_golden.rkt tests/corpus.txt > tests/golden.txt
+	$(BUILD)/difftest_san tests/corpus.txt tests/golden.txt
+
+# valgrind memcheck over the differential test (no sanitizers).
+valgrind: $(BUILD)/difftest
+	racket tests/gen_golden.rkt tests/corpus.txt > tests/golden.txt
+	valgrind -q --leak-check=full --error-exitcode=1 \
+	    $(BUILD)/difftest tests/corpus.txt tests/golden.txt
+
+# Static analysis: runs clang-tidy / cppcheck when installed, else skips.
+lint:
+	@if command -v clang-tidy >/dev/null 2>&1; then \
+	    echo "== clang-tidy =="; \
+	    clang-tidy src/*.cpp tests/difftest.cpp -- $(CXXSTD) $(INCLUDES); \
+	 else echo "clang-tidy not installed; skipping"; fi
+	@if command -v cppcheck >/dev/null 2>&1; then \
+	    echo "== cppcheck =="; \
+	    cppcheck --std=c++20 --enable=warning,performance,portability \
+	        --inline-suppr --error-exitcode=1 -q $(INCLUDES) src tests/difftest.cpp; \
+	 else echo "cppcheck not installed; skipping"; fi
+
+# Apply the repo style in place (clang-format), when installed.
+format:
+	@if command -v clang-format >/dev/null 2>&1; then \
+	    clang-format -i include/engine/*.hpp src/*.hpp src/*.cpp \
+	        tests/difftest.cpp bench/*.cpp 2>/dev/null; echo "formatted"; \
+	 else echo "clang-format not installed; skipping"; fi
 
 clean:
 	rm -rf $(BUILD)

@@ -1,0 +1,23 @@
+# clang-tidy checks for the engine. Broad safety/quality families, minus a few
+# that fight this codebase's nature:
+#   * the VM hot loop is intrinsically pointer-arithmetic (sp[-1], sp++), so the
+#     pro-bounds pointer checks are disabled by design;
+#   * opcode/const tables use small integer literals (magic-number checks off).
+Checks: >
+  clang-analyzer-*,
+  bugprone-*,
+  performance-*,
+  portability-*,
+  readability-*,
+  cppcoreguidelines-*,
+  modernize-*,
+  -modernize-use-trailing-return-type,
+  -readability-magic-numbers,
+  -readability-identifier-length,
+  -cppcoreguidelines-avoid-magic-numbers,
+  -cppcoreguidelines-pro-bounds-pointer-arithmetic,
+  -cppcoreguidelines-pro-bounds-constant-array-index,
+  -cppcoreguidelines-avoid-do-while
+
+WarningsAsErrors: 'bugprone-*,clang-analyzer-*'
+HeaderFilterRegex: '.*\.hpp$'

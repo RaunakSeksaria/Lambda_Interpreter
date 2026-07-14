@@ -1,0 +1,8 @@
+# Style for the engine sources. Matches the hand-written code: Google base,
+# 2-space indent, 80-column, left-aligned pointers (`Value* p`).
+BasedOnStyle: Google
+Standard: c++20
+ColumnLimit: 80
+DerivePointerAlignment: false
+PointerAlignment: Left
+IncludeBlocks: Preserve
