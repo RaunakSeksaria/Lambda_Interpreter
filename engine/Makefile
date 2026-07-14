@@ -69,8 +69,10 @@ test: $(BUILD)/difftest
 	$(BUILD)/difftest tests/corpus.txt tests/golden.txt
 
 bench: $(BUILD)/bench_switch $(BUILD)/bench_goto
-	@echo "== switch dispatch =="; $(BUILD)/bench_switch
-	@echo "== computed-goto dispatch =="; $(BUILD)/bench_goto
+	@$(BUILD)/bench_switch
+	@echo ""; $(BUILD)/bench_goto
+	@echo ""; echo "== racket oracle (reference tree-walker) =="; \
+	    racket bench/bench_oracle.rkt
 
 # --- quality gates ---
 
