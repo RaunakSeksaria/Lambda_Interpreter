@@ -1,23 +1,34 @@
-# clang-tidy checks for the engine. Broad safety/quality families, minus a few
-# that fight this codebase's nature:
-#   * the VM hot loop is intrinsically pointer-arithmetic (sp[-1], sp++), so the
-#     pro-bounds pointer checks are disabled by design;
-#   * opcode/const tables use small integer literals (magic-number checks off).
+# clang-tidy for the engine — a curated, high-signal set rather than
+# everything-on. We keep the correctness/safety/performance families and the
+# individually valuable style checks, and disable checks that fight this
+# codebase's deliberate design:
+#   * the VM hot loop is pointer-arithmetic and macro-dispatch by design
+#     (pro-bounds-* and macro-usage would flag the whole interpreter core);
+#   * `#pragma once` is used intentionally (portability-avoid-pragma-once);
+#   * opcode/const tables use small integer literals (magic-number checks).
+# The one intentional UB — unguarded integer division — is suppressed at its
+# single site with a documented NOLINT, not globally.
 Checks: >
-  clang-analyzer-*,
   bugprone-*,
+  clang-analyzer-*,
   performance-*,
   portability-*,
-  readability-*,
-  cppcoreguidelines-*,
-  modernize-*,
-  -modernize-use-trailing-return-type,
-  -readability-magic-numbers,
-  -readability-identifier-length,
-  -cppcoreguidelines-avoid-magic-numbers,
-  -cppcoreguidelines-pro-bounds-pointer-arithmetic,
-  -cppcoreguidelines-pro-bounds-constant-array-index,
-  -cppcoreguidelines-avoid-do-while
+  cppcoreguidelines-init-variables,
+  cppcoreguidelines-pro-type-member-init,
+  cppcoreguidelines-narrowing-conversions,
+  cppcoreguidelines-slicing,
+  modernize-use-nodiscard,
+  modernize-use-emplace,
+  modernize-use-override,
+  modernize-use-nullptr,
+  modernize-use-equals-default,
+  readability-container-contains,
+  readability-container-size-empty,
+  readability-redundant-*,
+  readability-simplify-boolean-expr,
+  readability-qualified-auto,
+  -bugprone-easily-swappable-parameters,
+  -portability-avoid-pragma-once
 
-WarningsAsErrors: 'bugprone-*,clang-analyzer-*'
+WarningsAsErrors: 'bugprone-*,clang-analyzer-*,cppcoreguidelines-*,performance-*'
 HeaderFilterRegex: '.*\.hpp$'

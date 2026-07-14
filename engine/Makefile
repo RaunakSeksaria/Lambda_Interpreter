@@ -91,10 +91,14 @@ valgrind: $(BUILD)/difftest
 	    $(BUILD)/difftest tests/corpus.txt tests/golden.txt
 
 # Static analysis: runs clang-tidy / cppcheck when installed, else skips.
+# clang-tidy is invoked per file (one TU at a time) to bound peak memory.
 lint:
 	@if command -v clang-tidy >/dev/null 2>&1; then \
 	    echo "== clang-tidy =="; \
-	    clang-tidy src/*.cpp tests/difftest.cpp -- $(CXXSTD) $(INCLUDES); \
+	    for f in src/*.cpp tests/difftest.cpp; do \
+	        echo "  tidy $$f"; \
+	        clang-tidy "$$f" -- $(CXXSTD) $(INCLUDES) || exit 1; \
+	    done; \
 	 else echo "clang-tidy not installed; skipping"; fi
 	@if command -v cppcheck >/dev/null 2>&1; then \
 	    echo "== cppcheck =="; \

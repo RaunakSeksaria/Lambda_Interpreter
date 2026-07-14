@@ -86,7 +86,7 @@ class Compiler {
       }
     }
     auto found = input_index_.find(name);
-    std::uint32_t idx;
+    std::uint32_t idx = 0;
     if (found == input_index_.end()) {
       idx = static_cast<std::uint32_t>(prog_.input_names.size());
       prog_.input_names.push_back(name);
@@ -138,12 +138,12 @@ class Compiler {
       case NodeKind::LetStar: {
         scopes_.emplace_back();
         std::uint32_t base = slot_top_;
-        for (auto& b : n.bindings) {
+        for (const auto& b : n.bindings) {
           compile(*b.second);                        // value (sees prior binds)
           std::uint32_t slot = slot_top_++;
           n_locals_ = std::max(n_locals_, slot_top_);
           emit(Op::StoreLocal, slot);
-          scopes_.back().push_back({b.first, slot});
+          scopes_.back().emplace_back(b.first, slot);
         }
         compile(*n.kids[0]);                          // body
         scopes_.pop_back();
@@ -205,7 +205,7 @@ class Compiler {
         return std::max(stack_need(*n.kids[0]), stack_need(*n.kids[1]));
       case NodeKind::LetStar: {
         std::uint32_t peak = stack_need(*n.kids[0]);  // body
-        for (auto& b : n.bindings)
+        for (const auto& b : n.bindings)
           peak = std::max(peak, stack_need(*b.second));
         return peak;
       }

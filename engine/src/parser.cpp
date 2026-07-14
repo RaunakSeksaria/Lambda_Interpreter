@@ -30,7 +30,7 @@ class Parser {
   std::vector<Token> toks_;
   std::size_t pos_ = 0;
 
-  const Token& peek() const { return toks_[pos_]; }
+  [[nodiscard]] const Token& peek() const { return toks_[pos_]; }
   const Token& advance() { return toks_[pos_++]; }
 
   [[noreturn]] void fail(const std::string& msg) {
@@ -144,7 +144,7 @@ class Parser {
   NodePtr parse_app() {
     if (peek().kind != Tok::Symbol) fail("@ head must be a primitive symbol");
     std::string op = advance().text;
-    if (!primitives().count(op)) {
+    if (!primitives().contains(op)) {
       fail("@ head '" + op +
            "' is not a primitive (engine has no user-defined functions)");
     }

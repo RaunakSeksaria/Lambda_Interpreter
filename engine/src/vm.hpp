@@ -31,7 +31,7 @@ class VM {
   // Returns the single result value. Resets the store; never allocates.
   Value run(const Value* inputs);
 
-  const Program& program() const { return prog_; }
+  [[nodiscard]] const Program& program() const { return prog_; }
 
  private:
   const Program& prog_;

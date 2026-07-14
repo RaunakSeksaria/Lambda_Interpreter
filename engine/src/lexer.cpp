@@ -36,12 +36,12 @@ std::vector<Token> lex(const std::string& src) {
       continue;
     }
     if (c == '(' || c == '[') {
-      out.push_back({Tok::LParen});
+      out.emplace_back(Tok::LParen);
       ++i;
       continue;
     }
     if (c == ')' || c == ']') {
-      out.push_back({Tok::RParen});
+      out.emplace_back(Tok::RParen);
       ++i;
       continue;
     }
@@ -89,7 +89,7 @@ std::vector<Token> lex(const std::string& src) {
     }
   }
 
-  out.push_back({Tok::End});
+  out.emplace_back(Tok::End);
   return out;
 }
 

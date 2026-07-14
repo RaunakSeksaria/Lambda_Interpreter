@@ -15,7 +15,7 @@
 
 namespace engine {
 
-enum class NodeKind {
+enum class NodeKind : std::uint8_t {
   Int, Bool, Var,
   If, Let, LetStar,
   Prim,               // sym = operator; kids = args
@@ -27,7 +27,7 @@ struct Node;
 using NodePtr = std::unique_ptr<Node>;
 
 struct Node {
-  NodeKind kind;
+  NodeKind kind = NodeKind::Int;
   std::int64_t int_val = 0;                                 // Int
   bool bool_val = false;                                    // Bool
   std::string sym;                                          // Var / Prim op / Let var

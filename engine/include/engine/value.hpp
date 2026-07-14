@@ -28,13 +28,13 @@ struct Value {
   static Value make_loc(std::int64_t l) { return Value{Tag::Loc, l}; }
   static Value make_undef() { return Value{Tag::Undef, 0}; }
 
-  bool is_int() const { return tag == Tag::Int; }
-  bool is_bool() const { return tag == Tag::Bool; }
-  bool is_loc() const { return tag == Tag::Loc; }
-  bool is_undef() const { return tag == Tag::Undef; }
+  [[nodiscard]] bool is_int() const { return tag == Tag::Int; }
+  [[nodiscard]] bool is_bool() const { return tag == Tag::Bool; }
+  [[nodiscard]] bool is_loc() const { return tag == Tag::Loc; }
+  [[nodiscard]] bool is_undef() const { return tag == Tag::Undef; }
 
-  bool as_bool() const { return bits != 0; }
-  std::int64_t as_int() const { return bits; }
+  [[nodiscard]] bool as_bool() const { return bits != 0; }
+  [[nodiscard]] std::int64_t as_int() const { return bits; }
 
   bool operator==(const Value& o) const { return tag == o.tag && bits == o.bits; }
 };

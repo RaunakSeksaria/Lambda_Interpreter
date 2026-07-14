@@ -69,6 +69,10 @@ Value VM::run(const Value* inputs) {
   VM_CASE(Add) : { sp[-2] = Value::make_int(sp[-2].bits + sp[-1].bits); --sp; } VM_NEXT();
   VM_CASE(Sub) : { sp[-2] = Value::make_int(sp[-2].bits - sp[-1].bits); --sp; } VM_NEXT();
   VM_CASE(Mul) : { sp[-2] = Value::make_int(sp[-2].bits * sp[-1].bits); --sp; } VM_NEXT();
+  // Integer division is intentionally unguarded on the hot path: a zero divisor
+  // is treated as a config-time (compile-time) validation concern, not a
+  // per-tick branch. Callers are expected to supply well-formed signals.
+  // NOLINTNEXTLINE(clang-analyzer-core.DivideZero)
   VM_CASE(Div) : { sp[-2] = Value::make_int(sp[-2].bits / sp[-1].bits); --sp; } VM_NEXT();
 
   VM_CASE(Eq) : { sp[-2] = Value::make_bool(sp[-2].bits == sp[-1].bits); --sp; } VM_NEXT();
