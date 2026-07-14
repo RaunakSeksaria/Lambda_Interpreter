@@ -6,22 +6,23 @@
 // Dispatch macros. VM_CASE opens a handler, VM_NEXT advances to the next
 // instruction, VM_DISPATCH re-dispatches after a jump has set `ip`. The same
 // handler bodies are shared by both the switch and the computed-goto builds.
+// NOTE: VM_NEXT / VM_DISPATCH must NOT be wrapped in a do/while — in the switch
+// build the loop-control statement is `break`, and a `break` inside a do/while
+// would break that loop instead of the switch, falling through to the next
+// case. They are only ever used at statement position ending a handler, so the
+// bare multi-statement form is safe here.
 #ifdef ENGINE_COMPUTED_GOTO
 #define VM_CASE(name) L_##name
 #define VM_DISPATCH() goto* dispatch[static_cast<std::size_t>(ip->op)]
 #define VM_NEXT() \
-  do {            \
-    ++ip;         \
-    VM_DISPATCH();\
-  } while (0)
+  ++ip;           \
+  VM_DISPATCH()
 #else
 #define VM_CASE(name) case Op::name
 #define VM_DISPATCH() break
 #define VM_NEXT() \
-  do {            \
-    ++ip;         \
-    break;        \
-  } while (0)
+  ++ip;           \
+  break
 #endif
 
 namespace engine {

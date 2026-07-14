@@ -1,1 +1,6 @@
 build/
+
+# valgrind / crash core dumps
+vgcore.*
+core
+core.*
