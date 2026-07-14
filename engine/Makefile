@@ -100,10 +100,14 @@ lint:
 	        clang-tidy "$$f" -- $(CXXSTD) $(INCLUDES) || exit 1; \
 	    done; \
 	 else echo "clang-tidy not installed; skipping"; fi
+# cppcheck cannot parse the computed-goto extension (&&label / goto *tbl), so
+# -UENGINE_COMPUTED_GOTO points it at the switch config, whose handler bodies
+# are identical — real logic is still analyzed.
 	@if command -v cppcheck >/dev/null 2>&1; then \
 	    echo "== cppcheck =="; \
 	    cppcheck --std=c++20 --enable=warning,performance,portability \
-	        --inline-suppr --error-exitcode=1 -q $(INCLUDES) src tests/difftest.cpp; \
+	        --inline-suppr --error-exitcode=1 -q -UENGINE_COMPUTED_GOTO \
+	        $(INCLUDES) src tests/difftest.cpp; \
 	 else echo "cppcheck not installed; skipping"; fi
 
 # Apply the repo style in place (clang-format), when installed.
