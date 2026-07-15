@@ -1,109 +1,94 @@
-# λ-Calculus Interpreter
+# Hot-Path Expression Engine (+ λ-Calculus Reference Interpreter)
 
-An interpreter for an extended λ-calculus with a mutable store, written in Racket. The core calculus (lambda abstraction, application, `let`, `if`) is extended with sequential and recursive bindings, first-class store locations, sequencing, and loops. Ships with an interactive REPL and a built-in 32-case test suite.
+A zero-allocation **C++ expression-evaluation engine** for hot-path signal/rule
+evaluation — the configurable per-tick predicate evaluation a feed handler, risk
+check, or strategy gate performs in a low-latency trading system — built on and
+**differentially tested against** a Racket λ-calculus interpreter that serves as
+the executable reference semantics.
 
-## Features
-
-- **Lambda and application** — explicit application syntax `(@ f x y)`, closures, currying
-- **Bindings** — `let`; sequential `let*`; and `let*2`, an alternative semantics where bindings cannot see each other
-- **Recursion** — `letrec`, including mutual recursion
-- **Mutable store** — first-class locations with `ref` / `deref` / `set`, plus direct variable mutation with `set!`
-- **Control flow** — `if` with booleans, `seq` for sequencing, `while` loops
-- **Primitives** — arithmetic `+ - * /` (integer division), comparison `== < > <= >=`, boolean `not and or` (short-circuiting), all with type checking
-
-### Syntax at a glance
-
-| Construct | Syntax |
-|-----------|--------|
-| Application | `(@ f arg ...)` |
-| Lambda | `(lambda (x y) body)` |
-| Let / sequential | `(let ([x e]) body)`, `(let* ([x e1] [y e2]) body)` |
-| Recursion | `(letrec ([f (lambda (n) ...)]) body)` |
-| Store | `(ref e)`, `(deref l)`, `(set l v)`, `(set! x v)` |
-| Sequencing | `(seq e1 e2)` |
-| Loop | `(while cond body)` |
-
-## Getting started
-
-Requires Racket 8.x (tested on 8.12). Start the REPL:
+The engine compiles S-expression signals to bytecode and runs them on a stack VM
+with compile-time lexical addressing, ≤16-byte tagged values, and no per-tick
+allocation. The Racket interpreter (the original project) is kept **unchanged**
+and reused as a differential-test **oracle**, so every optimization is proven to
+preserve the reference behaviour.
 
 ```bash
+# the engine
+cd engine && make && make test && make bench
+
+# the reference interpreter (oracle)
 racket interpreter.rkt
 ```
 
-```
-λ-calc> (@ + 1 2)
-=> 3
-
-λ-calc> (letrec ([fact (lambda (n) (if (@ == n 0) 1 (@ * n (@ fact (@ - n 1)))))]) (@ fact 5))
-=> 120
-```
-
-REPL commands: `help` (syntax reference), `examples` (sample expressions), `run-tests` (test suite), `clear`, `quit`.
-
-To evaluate a single expression from the shell:
+## The engine — [`engine/`](engine/)
 
 ```bash
-racket -e '(require "./interpreter.rkt") (displayln (eval '\''(@ + 1 2)))'
+cd engine
+make            # build (strict, -Werror)
+make test       # differential test vs the Racket oracle
+make bench      # latency benchmark: switch vs computed-goto + baselines
+make sanitize   # ASan + UBSan
+make lint       # clang-tidy + cppcheck
+
+./build/lambda_eval "(if (@ < bid ask) (@ - ask bid) 0)" bid=100 ask=101   # => 1
 ```
 
-## Examples
+**Headline results** (i5-1340P, thread-pinned; reproduce with `make bench`):
 
-Closures and currying:
+| signal (computed-goto) | ns/eval | vs Racket tree-walker | vs native C++ |
+|------------------------|--------:|----------------------:|--------------:|
+| light (straight-line)  |      34 |                  ~36× |          ~25× |
+| branchy (data-dep.)    |      26 |                  ~32× |           ~8× |
+| heavy (32-iter loop)   |     865 |                  ~33× |     *(note)*  |
 
-```racket
-(let ([square (lambda (x) (@ * x x))])
-  (@ square 7))                                     ; => 49
+- **~30× faster than the reference tree-walker** (compiled bytecode + lexical
+  addressing + no boxing); **~8–25× the cost of hand-coded native** (the price of
+  configurability).
+- A **switch vs computed-goto dispatch study** shows threaded dispatch is *not* a
+  universal win: within noise on short signals, ~21% only on the long loop, and
+  that win tracks **retired-instruction count, not branch misses** — reproducing
+  the modern finding that its historical edge has eroded on good indirect-branch
+  predictors.
 
-(@ (@ (lambda (x) (lambda (y) (@ + x y))) 3) 4)     ; => 7
-```
+Design, full results, and the honest caveats are in **[engine/README.md](engine/README.md)**;
+engine internals are in [docs/DESIGN.md](docs/DESIGN.md#c-engine).
 
-Sequential bindings:
+## The reference interpreter (oracle) — [`interpreter.rkt`](interpreter.rkt)
 
-```racket
-(let* ([x 1]
-       [y (@ + x 1)]
-       [z (@ + y 1)])
-  z)                                                ; => 3
-```
-
-Mutual recursion:
-
-```racket
-(letrec ([even (lambda (n) (if (@ == n 0) #t (@ odd  (@ - n 1))))]
-         [odd  (lambda (n) (if (@ == n 0) #f (@ even (@ - n 1))))])
-  (@ even 4))                                       ; => #t
-```
-
-Mutable state — a counter closed over a store location:
-
-```racket
-(let ([counter (ref 0)])
-  (let ([inc (lambda ()
-               (seq (set counter (@ + (deref counter) 1))
-                    (deref counter)))])
-    (seq (@ inc)
-         (seq (@ inc)
-              (@ inc)))))                           ; => 3
-```
-
-Closures sharing a location:
-
-```racket
-(let ([r (ref 10)])
-  (let ([adder (lambda (x) (set r (@ + (deref r) x)))])
-    (seq (@ adder 5)
-         (deref r))))                               ; => 15
-```
-
-## Testing
-
-Run the 32-case suite (core calculus, bindings, recursion, store operations, loops, and the alternative `let*2` / `set!` semantics):
+An interpreter for an extended λ-calculus with a mutable store, in Racket — the
+original project, now the engine's oracle. Core calculus (`lambda`, `@`
+application, `let`, `if`) extended with sequential/recursive bindings, first-class
+store locations, sequencing, and loops, plus an interactive REPL and a 32-case
+test suite.
 
 ```bash
+racket interpreter.rkt            # REPL (help, examples, run-tests, quit)
 echo "run-tests" | racket interpreter.rkt
 ```
 
-## Design
+```racket
+λ-calc> (@ + 1 2)                                                    ; => 3
+λ-calc> (letrec ([fact (lambda (n)
+                         (if (@ == n 0) 1 (@ * n (@ fact (@ - n 1)))))])
+          (@ fact 5))                                                ; => 120
+```
 
-Evaluation is environment-based with a global mutable store (a Racket `box`), so the store is not threaded through the evaluator. `letrec` is implemented with boxed environment bindings that are patched in place, and `set` works on both explicit locations and plain variables via an implicit location table. Design rationale, formal big-step rules, and the `set` vs `set!` comparison live in [docs/DESIGN.md](docs/DESIGN.md).
+| Construct | Syntax |
+|-----------|--------|
+| Application / lambda | `(@ f arg ...)`, `(lambda (x y) body)` |
+| Bindings | `(let ([x e]) body)`, `let*`, `let*2`, `letrec` |
+| Store | `(ref e)`, `(deref l)`, `(set l v)`, `(set! x v)` |
+| Control | `(if c t e)`, `(seq e1 e2)`, `(while cond body)` |
+| Primitives | `+ - * /` (integer), `== < > <= >=`, `not and or` |
+
+Semantics, formal big-step rules, and the `set` vs `set!` design discussion are in
+[docs/DESIGN.md](docs/DESIGN.md). The engine implements the first-order subset of
+this grammar (no closures / `letrec` / `set!`).
+
+## Repository layout
+
+```
+interpreter.rkt     Racket reference interpreter + REPL + tests (the oracle)
+engine/             the C++ hot-path expression engine (see engine/README.md)
+docs/DESIGN.md      interpreter semantics + the C++ engine design & results
+```

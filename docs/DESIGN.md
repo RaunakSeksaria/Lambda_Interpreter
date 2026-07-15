@@ -244,3 +244,93 @@ The REPL is a tail-recursive loop dispatching on input with `match`; expression 
 ```
 
 Internal values are abstracted for display — `<closure: params=(x y)>`, `<primitive: +>`, `<loc:0>` — and the store is reset before each top-level evaluation so entries don't interfere.
+
+# C++ Engine
+
+The interpreter above is a definitional tree-walker: correct and readable, but
+built for clarity, not speed (assoc-list environment, boxed values, fresh AST walk
+per evaluation). [`engine/`](../engine/) is a second implementation of the same
+first-order language, reframed as a **hot-path expression-evaluation engine** — a
+compiled bytecode VM for the configurable per-tick rule/signal evaluation a
+low-latency trading system runs. The Racket interpreter is kept unchanged as the
+engine's **differential-test oracle**, so the optimizations below are provably
+semantics-preserving. Pipeline: `source → lexer → parser → AST → compiler →
+Program (bytecode) → stack VM → Value`.
+
+## Value layout
+
+A runtime value is a 16-byte tagged union — `{ Tag tag; int64 bits; }`, Int / Bool
+/ Loc / Undef — trivially copyable, kept to a size that stays register- and
+cache-friendly, and never part of a heap graph. This replaces the interpreter's
+boxed Racket values. (The engine is first-order, so there are no closure values to
+represent.)
+
+## Compile-time lexical addressing
+
+The largest win. The interpreter resolves a variable at *run time* with
+`lookup-env` — an `assoc` walk doing string compares down a list, on every access.
+The compiler instead resolves every variable **once, at compile time**, to an
+integer index: an input slot (free variables = market inputs) or a local frame
+slot (`let`/`let*`), emitting `LoadInput`/`LoadLocal` with that index. The hot loop
+then does an O(1) array index and never touches a name. Same idea as de Bruijn
+indexing; it is both the biggest latency win and the reason the VM has no string
+handling at all.
+
+## Static sizing → zero allocation
+
+The compiler computes, for each program, the operand-stack high-water mark
+(`max_stack`, from a structural pass over the AST), the local frame size
+(`n_locals`), and the store size (`max_store`, the count of `ref` sites). The VM
+preallocates all three buffers **once** in its constructor; each evaluation resets
+a store counter (mirroring the interpreter's `reset-store!`). There is no `malloc`
+on the per-tick path — the property that matters for tail latency.
+
+## Two dispatch strategies from one source
+
+The VM's opcode handlers are written once and compiled two ways via macros
+(`VM_CASE`/`VM_NEXT`/`VM_DISPATCH`): a portable `switch` over the opcode, and a
+computed-goto (direct-threaded) build using GNU label-address (`&&L`) and
+`goto *table[op]`. They are compiled into separate objects (`vm_switch.o`,
+`vm_goto.o`) so the two can be benchmarked head-to-head without code drift. Writing
+the shared handlers taught one sharp bug: `VM_NEXT` originally wrapped its `break`
+in a `do { … } while(0)`, which in the `switch` build broke the *loop* wrapper
+instead of the `switch`, so every opcode fell through to the next case — invisible
+to the computed-goto build and caught only by the differential test.
+
+## Correctness gate
+
+Every change is validated by **differential testing**: `tests/gen_golden.rkt`
+evaluates a corpus through the Racket oracle, `tests/difftest.cpp` evaluates the
+same corpus through the engine, and the two must agree byte-for-byte (both dispatch
+builds pass). This is what lets the engine be aggressively optimized without fear —
+the reference interpreter defines "correct". The build additionally runs under
+strict warnings + `-Werror`, ASan/UBSan, clang-tidy/cppcheck, and CI.
+
+## Benchmark methodology and findings
+
+`bench/bench_vm.cpp` pins the thread, preallocates the entire input stream (no
+per-tick allocation), verifies the engine agrees with a hand-written native
+function before timing, and measures three signals — **light** (straight-line
+predicate), **branchy** (data-dependent branches), **heavy** (32-iteration loop) —
+via batch throughput (headline ns/eval and cycles/eval, no per-eval fence
+overhead), fenced `rdtsc` percentiles (tail), and `perf_event_open` counters
+(instructions, IPC, branches, misses). `bench/bench_oracle.rkt` times the Racket
+tree-walker as the before→after baseline.
+
+Findings (i5-1340P, pinned, computed-goto):
+
+- **~30× faster than the reference tree-walker** across signals — the payoff of
+  compiled bytecode, lexical addressing, and unboxed values over a boxed assoc-list
+  AST walk.
+- **~8–25× the cost of hand-written native C++** for the straight-line signals —
+  an honest read on interpreter overhead. (The loop signal's native ratio is not
+  cited: the optimizer collapses its loop-invariant sum to a closed form, so native
+  does O(1) while the engine loops — apples to oranges.)
+- **Dispatch is not folklore.** Computed-goto is within run-to-run noise on the
+  short signals and wins ~21% only on the long loop; `perf` attributes that to ~33%
+  fewer *retired instructions* (no per-op range-check + jump-table indirection),
+  **not** to fewer branch misses (computed-goto often mispredicts *more* here). This
+  reproduces Rohou et al. (2015): on modern indirect-branch predictors, threaded
+  dispatch's classic advantage has largely eroded. The tail (p999) is also
+  jitter-sensitive — an occasional scheduler preemption shows up as a multi-hundred-
+  thousand-cycle outlier while p50/p99 stay tight.
