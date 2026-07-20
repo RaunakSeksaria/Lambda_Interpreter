@@ -19,6 +19,8 @@ optimization is proven to preserve the reference semantics.
 ```bash
 make            # build lambda_eval + difftest (strict, -Werror)
 make test       # differential test vs the Racket oracle (needs racket)
+make alloc-audit # assert run() performs zero heap allocation
+make check      # all correctness gates: test + alloc-audit + lint
 make bench      # latency benchmark: switch vs computed-goto, + baselines
 make sanitize   # ASan + UBSan over the differential test
 make lint       # clang-tidy + cppcheck (when installed)
@@ -44,14 +46,15 @@ The design decisions are the point:
 - **Zero allocation on the hot path.** The operand stack, local frame, and
   `ref`/`set` store are all sized by the compiler (`max_stack`, `n_locals`,
   `max_store`) and preallocated once; each evaluation resets a counter. No
-  `malloc` per tick.
+  `malloc` per tick — enforced by `make alloc-audit`, which interposes global
+  `operator new`/`delete` and fails if any corpus case allocates during `run()`.
 - **Two dispatch strategies from one source.** The VM handler bodies are shared
   by a `switch` build and a computed-goto (threaded) build via macros, compiled
   into separate objects so the two can be benchmarked head-to-head.
 
 Correctness is gated by **differential testing** against the Racket oracle
-(`make test`), and the build runs under strict warnings + `-Werror`, ASan/UBSan,
-clang-tidy/cppcheck, and CI.
+(`make test`), the zero-allocation claim by `make alloc-audit`, and the build
+runs under strict warnings + `-Werror`, ASan/UBSan, clang-tidy/cppcheck, and CI.
 
 ## Results
 

@@ -6,6 +6,8 @@
 #
 #   make            # build lambda_eval, difftest, bench (switch + goto)
 #   make test       # regenerate golden from the Racket oracle, run difftest
+#   make alloc-audit # assert run() performs no heap allocation
+#   make check      # all correctness gates: test + alloc-audit + lint
 #   make bench      # run both benchmark binaries
 #   make clean
 
@@ -33,7 +35,7 @@ BUILD := build
 FRONT_SRCS := src/lexer.cpp src/parser.cpp src/compiler.cpp
 FRONT_OBJS := $(BUILD)/lexer.o $(BUILD)/parser.o $(BUILD)/compiler.o
 
-.PHONY: all test bench sanitize valgrind lint format clean
+.PHONY: all test alloc-audit check bench sanitize valgrind lint format clean
 # Default build: the usable binaries + the differential-test driver. Benchmarks
 # are built on demand via `make bench` (perf-sensitive; not part of CI).
 all: $(BUILD)/lambda_eval $(BUILD)/difftest
@@ -58,6 +60,9 @@ $(BUILD)/lambda_eval: src/main.cpp $(FRONT_OBJS) $(BUILD)/vm_goto.o | $(BUILD)
 $(BUILD)/difftest: tests/difftest.cpp $(FRONT_OBJS) $(BUILD)/vm_switch.o | $(BUILD)
 	$(CXX) $(CXXFLAGS) $^ -o $@
 
+$(BUILD)/alloc_audit: tests/alloc_audit.cpp $(FRONT_OBJS) $(BUILD)/vm_switch.o | $(BUILD)
+	$(CXX) $(CXXFLAGS) $^ -o $@
+
 $(BUILD)/bench_switch: bench/bench_vm.cpp $(FRONT_OBJS) $(BUILD)/vm_switch.o | $(BUILD)
 	$(CXX) $(CXXFLAGS) -DENGINE_DISPATCH_NAME='"switch"' $^ -o $@
 
@@ -67,6 +72,17 @@ $(BUILD)/bench_goto: bench/bench_vm.cpp $(FRONT_OBJS) $(BUILD)/vm_goto.o | $(BUI
 test: $(BUILD)/difftest
 	racket tests/gen_golden.rkt tests/corpus.txt > tests/golden.txt
 	$(BUILD)/difftest tests/corpus.txt tests/golden.txt
+
+# Interposes global operator new/delete and asserts run() allocates nothing on
+# every corpus case — the gate for vm.hpp's zero-allocation claim, which no
+# compiler check enforces and which difftest cannot see.
+alloc-audit: $(BUILD)/alloc_audit
+	$(BUILD)/alloc_audit tests/corpus.txt
+
+# Every correctness gate, in increasing order of cost. Kept separate from
+# `test` because `test` shells out to racket for the golden file, while
+# alloc-audit needs only a compiler — a racket-less checkout can still run it.
+check: test alloc-audit lint
 
 bench: $(BUILD)/bench_switch $(BUILD)/bench_goto
 	@$(BUILD)/bench_switch
@@ -97,7 +113,7 @@ valgrind: $(BUILD)/difftest
 lint:
 	@if command -v clang-tidy >/dev/null 2>&1; then \
 	    echo "== clang-tidy =="; \
-	    for f in src/*.cpp tests/difftest.cpp; do \
+	    for f in src/*.cpp tests/difftest.cpp tests/alloc_audit.cpp; do \
 	        echo "  tidy $$f"; \
 	        clang-tidy "$$f" -- $(CXXSTD) $(INCLUDES) || exit 1; \
 	    done; \
@@ -109,14 +125,14 @@ lint:
 	    echo "== cppcheck =="; \
 	    cppcheck --std=c++20 --enable=warning,performance,portability \
 	        --inline-suppr --error-exitcode=1 -q -UENGINE_COMPUTED_GOTO \
-	        $(INCLUDES) src tests/difftest.cpp; \
+	        $(INCLUDES) src tests/difftest.cpp tests/alloc_audit.cpp; \
 	 else echo "cppcheck not installed; skipping"; fi
 
 # Apply the repo style in place (clang-format), when installed.
 format:
 	@if command -v clang-format >/dev/null 2>&1; then \
 	    clang-format -i include/engine/*.hpp src/*.hpp src/*.cpp \
-	        tests/difftest.cpp bench/*.cpp 2>/dev/null; echo "formatted"; \
+	        tests/difftest.cpp tests/alloc_audit.cpp bench/*.cpp 2>/dev/null; echo "formatted"; \
 	 else echo "clang-format not installed; skipping"; fi
 
 clean:

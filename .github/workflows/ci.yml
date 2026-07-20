@@ -30,6 +30,9 @@ jobs:
       - name: Differential test vs Racket oracle
         run: make test OPT="-O3 -DNDEBUG"
 
+      - name: Zero-allocation audit
+        run: make alloc-audit OPT="-O3 -DNDEBUG"
+
       - name: Sanitizers (ASan + UBSan)
         run: make sanitize
 
